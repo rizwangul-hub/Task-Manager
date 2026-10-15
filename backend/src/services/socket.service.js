@@ -36,9 +36,10 @@ export const socketService = {
       await Promise.all([publisher.connect(), subscriber.connect()]);
       io.adapter(createAdapter(publisher, subscriber));
       redisClients = [publisher, subscriber];
-      logger.info('Socket.IO Redis adapter connected for cross-worker event delivery.');
-    } else if (env.NODE_ENV === 'production') {
+    } else if (env.NODE_ENV === 'production' && process.env.REQUIRE_REDIS === 'true') {
       throw new Error('REDIS_URL is required for production Socket.IO event delivery.');
+    } else {
+      logger.info('Socket.IO initialized with default in-memory adapter (single-instance).');
     }
 
     // Authentication middleware

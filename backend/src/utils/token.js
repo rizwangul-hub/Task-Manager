@@ -49,12 +49,14 @@ export const verifyRefreshToken = (token) => {
  */
 export const setAuthCookies = (res, accessToken, refreshToken) => {
   const isProduction = env.NODE_ENV === 'production' || env.JWT.cookieSecure;
+  const sameSite = env.JWT.cookieSameSite || (isProduction ? 'none' : 'lax');
+  const secure = isProduction || sameSite === 'none';
 
   // Access token cookie (short-lived)
   res.cookie('access_token', accessToken, {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
+    secure,
+    sameSite,
     maxAge: 15 * 60 * 1000 // 15 minutes
   });
 
@@ -62,8 +64,8 @@ export const setAuthCookies = (res, accessToken, refreshToken) => {
   if (refreshToken) {
     res.cookie('refresh_token', refreshToken, {
       httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
+      secure,
+      sameSite,
       path: '/api/auth',
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
@@ -75,17 +77,19 @@ export const setAuthCookies = (res, accessToken, refreshToken) => {
  */
 export const clearAuthCookies = (res) => {
   const isProduction = env.NODE_ENV === 'production' || env.JWT.cookieSecure;
+  const sameSite = env.JWT.cookieSameSite || (isProduction ? 'none' : 'lax');
+  const secure = isProduction || sameSite === 'none';
 
   res.clearCookie('access_token', {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax'
+    secure,
+    sameSite
   });
 
   res.clearCookie('refresh_token', {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
+    secure,
+    sameSite,
     path: '/api/auth'
   });
 };

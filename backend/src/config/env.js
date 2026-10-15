@@ -65,7 +65,8 @@ export const env = {
     refreshSecret: process.env.JWT_REFRESH_SECRET || 'pixx_default_dev_refresh_secret_change_in_prod',
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || process.env.JWT_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
-    cookieSecure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production'
+    cookieSecure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
+    cookieSameSite: process.env.COOKIE_SAME_SITE || (process.env.NODE_ENV === 'production' ? 'none' : 'lax')
   },
   OWNER: {
     email: process.env.OWNER_EMAIL || process.env.INITIAL_ADMIN_EMAIL || 'admin@pixxtechnologiees.com',
@@ -171,7 +172,7 @@ export const validateEnv = () => {
     if (!env.MONGODB_URI) {
       configErrors.push('MONGO_URI (or MONGODB_URI) is required.');
     }
-    if (!env.REDIS_URL) {
+    if (process.env.REQUIRE_REDIS === 'true' && !env.REDIS_URL) {
       configErrors.push('REDIS_URL is required for clustered Socket.IO event delivery.');
     }
     if (!env.FRONTEND_URL) {
