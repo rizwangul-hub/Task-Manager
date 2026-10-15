@@ -112,6 +112,29 @@ test('Baileys message helpers extract text and route group titles', () => {
   assert.equal(whatsappListenerInternals.getGroupTitle('General request'), 'General Tasks');
 });
 
+test('Baileys listener parses multiple allowed groups and handles all mode', () => {
+  const previousGroupIds = process.env.PIXX_WHATSAPP_GROUP_ID;
+  try {
+    process.env.PIXX_WHATSAPP_GROUP_ID = '120363000000000001@g.us, 120363000000000002@g.us,,';
+    assert.deepEqual(whatsappListenerInternals.getAllowedGroups(), [
+      '120363000000000001@g.us',
+      '120363000000000002@g.us'
+    ]);
+    assert.equal(whatsappListenerInternals.isTargetGroup('120363000000000002@g.us'), true);
+    assert.equal(whatsappListenerInternals.isTargetGroup('120363000000000003@g.us'), false);
+
+    process.env.PIXX_WHATSAPP_GROUP_ID = ' all ';
+    assert.deepEqual(whatsappListenerInternals.getAllowedGroups(), ['all']);
+    assert.equal(whatsappListenerInternals.isTargetGroup('120363000000000003@g.us'), true);
+    assert.equal(whatsappListenerInternals.shouldIgnoreJid('status@broadcast'), true);
+    assert.equal(whatsappListenerInternals.shouldIgnoreJid('12345@lid'), true);
+    assert.equal(whatsappListenerInternals.shouldIgnoreJid('120363000000000003@g.us'), false);
+  } finally {
+    if (previousGroupIds === undefined) delete process.env.PIXX_WHATSAPP_GROUP_ID;
+    else process.env.PIXX_WHATSAPP_GROUP_ID = previousGroupIds;
+  }
+});
+
 test('Baileys listener suppresses only decrypt errors from history or non-group messages', () => {
   const badMacError = new Error('Bad MAC');
   assert.equal(whatsappListenerInternals.isExpectedHistoryDecryptError(

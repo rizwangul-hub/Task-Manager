@@ -14,10 +14,10 @@ import { logger } from '../utils/logger.js';
 const MAX_MEDIA_BYTES = env.WHATSAPP.maxMediaBytes;
 
 /**
- * Pino logger at 'error' level only.
- * Suppresses Baileys info/debug/warn noise while still capturing real errors.
+ * Pino logger at 'silent' level.
+ * Completely suppresses Baileys internal Bad MAC, decrypt, and SessionError spam.
  */
-const baileysLogger = pino({ level: 'error' });
+const baileysLogger = pino({ level: 'silent' });
 
 // ─── Module-level singleton state ─────────────────────────────────────────────
 /** @type {import('@whiskeysockets/baileys').WASocket | null} */
@@ -88,21 +88,29 @@ const getMediaFileName = (messageId, mimeType = 'image/jpeg') => {
   return `whatsapp-${safeId}.${extension}`;
 };
 
-/** Helper to retrieve the active WhatsApp group ID configuration */
-const getConfiguredGroupId = () =>
-  (process.env.PIXX_WHATSAPP_GROUP_ID || process.env.WHATSAPP_GROUP_ID || env.WHATSAPP.groupId || '').trim();
-
-/** Check if group filter is set to 'all' or empty, allowing any group */
-const isAllowAllGroups = () => {
-  const groupId = getConfiguredGroupId();
-  return !groupId || groupId.toLowerCase() === 'all';
+/** Parse the configured WhatsApp group allowlist. */
+const getAllowedGroups = () => {
+  const raw = process.env.PIXX_WHATSAPP_GROUP_ID ||
+    process.env.WHATSAPP_GROUP_ID ||
+    env.WHATSAPP.groupId ||
+    '';
+  if (raw.trim().toLowerCase() === 'all' || !raw.trim()) return ['all'];
+  return raw.split(',').map((id) => id.trim()).filter(Boolean);
 };
+
+const getConfiguredGroupId = () => getAllowedGroups().join(',');
+
+const isAllowAllGroups = () => getAllowedGroups().includes('all');
 
 /** Determine whether an incoming group message is permitted for processing */
 const isTargetGroup = (remoteJid) => {
-  if (isAllowAllGroups()) return true;
-  return remoteJid === getConfiguredGroupId();
+  const allowed = getAllowedGroups();
+  if (allowed.includes('all')) return true;
+  return allowed.includes(remoteJid);
 };
+
+const shouldIgnoreJid = (jid) =>
+  typeof jid !== 'string' || jid.endsWith('@lid') || jid.endsWith('@broadcast');
 
 /**
  * Returns true for Bad MAC / decrypt errors that are expected noise from
@@ -110,13 +118,14 @@ const isTargetGroup = (remoteJid) => {
  */
 const isExpectedHistoryDecryptError = (error, message, upsertType) => {
   const errorMessage = error instanceof Error ? error.message : String(error || '');
-  if (!/bad mac|decrypt/i.test(errorMessage)) return false;
+  if (!/bad mac|decrypt|sessionerror/i.test(errorMessage)) return false;
 
   const remoteJid = message?.key?.remoteJid || '';
-  // Expected if: not a live notify, came from status broadcasts, or not a group
+  // Expected if: not a live notify, came from status broadcasts, LID, or not a group
   return (
     upsertType !== 'notify' ||
     remoteJid === 'status@broadcast' ||
+    remoteJid.endsWith('@lid') ||
     !remoteJid.endsWith('@g.us')
   );
 };
@@ -155,10 +164,11 @@ const downloadImage = async (message, sockRef) => {
 const handleMessage = async (activeSock, message) => {
   const remoteJid = message.key?.remoteJid || '';
 
-  // Ignore: own messages, status broadcasts, non-group chats, or non-matching groups
+  // Ignore: own messages, status broadcasts, LID syncs, non-group chats, or non-matching groups
   if (
     !message.key?.id ||
     message.key.fromMe ||
+    remoteJid.endsWith('@lid') ||
     remoteJid === 'status@broadcast' ||
     !remoteJid.endsWith('@g.us') ||
     !isTargetGroup(remoteJid)
@@ -252,11 +262,11 @@ export const initWhatsAppListener = async () => {
 
     const newSock = makeWASocket({
       auth: state,
-      logger: baileysLogger,          // error-level only — suppresses decrypt/retry noise
+      logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
       markOnlineOnConnect: false,     // prevent WhatsApp marking the account as online
       syncFullHistory: false,         // do not request full chat history on connect
-      shouldIgnoreJid: () => false,
+      shouldIgnoreJid,
       /**
        * getMessage stub required by Baileys to resolve retry receipts.
        * Without this, Baileys re-requests every undecryptable message
@@ -282,10 +292,7 @@ export const initWhatsAppListener = async () => {
       }
 
       if (update.connection === 'open') {
-        const mode = isAllowAllGroups()
-          ? 'ALL groups ("all" mode active)'
-          : `group ${getConfiguredGroupId()}`;
-        logger.info(`[WA] Baileys connected — listening on ${mode}.`);
+        logger.info(`[INFO] [WA] Listening for tasks across ${getAllowedGroups().length} designated group(s).`);
       }
 
       if (update.connection === 'close') {
@@ -319,23 +326,29 @@ export const initWhatsAppListener = async () => {
       if (type !== 'notify') return;
 
       for (const msg of messages) {
-        const remoteJid = msg.key?.remoteJid || '';
+        const jid = msg.key?.remoteJid;
+        if (
+          shouldIgnoreJid(jid) ||
+          !jid.endsWith('@g.us') ||
+          !isTargetGroup(jid)
+        ) continue;
 
-        // 1. Log incoming WhatsApp group messages and JIDs clearly
-        if (remoteJid.endsWith('@g.us')) {
-          console.log('📩 [WHATSAPP GROUP DETECTED]:', {
-            groupId: remoteJid,
-            sender: msg.pushName || msg.key?.participant,
-            text: msg.message?.conversation ||
-                  msg.message?.extendedTextMessage?.text ||
-                  msg.message?.imageMessage?.caption ||
-                  '[Media/Image]'
-          });
-        }
+        console.log('📩 [WHATSAPP GROUP DETECTED]:', {
+          groupId: jid,
+          sender: msg.pushName || msg.key?.participant,
+          text: msg.message?.conversation ||
+                msg.message?.extendedTextMessage?.text ||
+                msg.message?.imageMessage?.caption ||
+                '[Media/Image]'
+        });
 
+        // Process task extraction with per-message error isolation.
         void handleMessage(newSock, msg).catch((err) => {
-          // Suppress expected Bad MAC / decrypt noise from history replay
-          if (isExpectedHistoryDecryptError(err, msg, type)) return;
+          // Suppress expected Bad MAC / decrypt / SessionError noise
+          const errMsg = err?.message || String(err || '');
+          if (/bad mac|decrypt|sessionerror/i.test(errMsg) || isExpectedHistoryDecryptError(err, msg, type)) {
+            return;
+          }
           logger.error(
             `[WA] Failed to ingest message ${msg.key?.id ?? 'unknown'}:`,
             err
@@ -387,5 +400,7 @@ export const whatsappListenerInternals = {
   isExpectedHistoryDecryptError,
   isAllowAllGroups,
   isTargetGroup,
-  getConfiguredGroupId
+  getConfiguredGroupId,
+  getAllowedGroups,
+  shouldIgnoreJid
 };
