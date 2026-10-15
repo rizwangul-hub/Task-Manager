@@ -298,21 +298,29 @@ export const taskController = {
         `*Assigned To:* ${populated.assignees?.map((a) => a.name || a.email).join(', ') || 'Unassigned'}`
       ].join('\n');
 
-      const targetJid =
-        req.body.whatsappTarget ||
-        req.body.targetJid ||
-        env.WHATSAPP.taskNotificationJid ||
-        process.env.WHATSAPP_NOTIFICATION_TARGET ||
-        process.env.WHATSAPP_OUTBOUND_JID ||
-        (process.env.PIXX_WHATSAPP_GROUP_ID && process.env.PIXX_WHATSAPP_GROUP_ID !== 'all' ? process.env.PIXX_WHATSAPP_GROUP_ID : null) ||
-        (process.env.WHATSAPP_GROUP_ID && process.env.WHATSAPP_GROUP_ID !== 'all' ? process.env.WHATSAPP_GROUP_ID : null);
+      const hasWhatsAppPreference = Object.prototype.hasOwnProperty.call(req.body, 'sendToWhatsApp');
+      const targetJid = hasWhatsAppPreference
+        ? (
+          req.body.sendToWhatsApp === true && typeof req.body.whatsappTarget === 'string'
+            ? req.body.whatsappTarget.trim()
+            : null
+        )
+        : (
+          req.body.whatsappTarget ||
+          req.body.targetJid ||
+          env.WHATSAPP.taskNotificationJid ||
+          process.env.WHATSAPP_NOTIFICATION_TARGET ||
+          process.env.WHATSAPP_OUTBOUND_JID ||
+          (process.env.PIXX_WHATSAPP_GROUP_ID && process.env.PIXX_WHATSAPP_GROUP_ID !== 'all' ? process.env.PIXX_WHATSAPP_GROUP_ID : null) ||
+          (process.env.WHATSAPP_GROUP_ID && process.env.WHATSAPP_GROUP_ID !== 'all' ? process.env.WHATSAPP_GROUP_ID : null)
+        );
 
       if (targetJid) {
         void sendWhatsAppMessage(targetJid, whatsAppTaskMessage);
       }
 
       // Also dispatch to assignees with registered phone numbers
-      if (Array.isArray(populated.assignees)) {
+      if (!hasWhatsAppPreference && Array.isArray(populated.assignees)) {
         for (const assignee of populated.assignees) {
           if (assignee?.phone && assignee.phone.trim()) {
             const cleanPhone = assignee.phone.trim();

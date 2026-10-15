@@ -117,6 +117,8 @@ export const AllTasksPage = () => {
   const [formPriority, setFormPriority] = useState('Medium');
   const [formStartDate, setFormStartDate] = useState('');
   const [formDueDate, setFormDueDate] = useState('');
+  const [sendToWhatsApp, setSendToWhatsApp] = useState(false);
+  const [whatsappTarget, setWhatsappTarget] = useState('');
   const [formError, setFormError] = useState('');
 
   // Save view preference
@@ -321,6 +323,8 @@ export const AllTasksPage = () => {
     setFormPriority('Medium');
     setFormStartDate('');
     setFormDueDate('');
+    setSendToWhatsApp(false);
+    setWhatsappTarget('');
     setFormError('');
   };
 
@@ -351,6 +355,10 @@ export const AllTasksPage = () => {
       setFormError('Task title and target project are required.');
       return;
     }
+    if (sendToWhatsApp && !whatsappTarget.trim()) {
+      setFormError('Enter a WhatsApp number or group JID to send this task.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -362,7 +370,9 @@ export const AllTasksPage = () => {
         status: formStatus,
         priority: formPriority,
         startDate: formStartDate || null,
-        dueDate: formDueDate || null
+        dueDate: formDueDate || null,
+        sendToWhatsApp,
+        ...(sendToWhatsApp ? { whatsappTarget: whatsappTarget.trim() } : {})
       });
 
       toast.success('Task created successfully.');
@@ -967,6 +977,37 @@ export const AllTasksPage = () => {
                 onChange={(e) => setFormDueDate(e.target.value)}
               />
             </FormField>
+          </div>
+
+          <div className="mt-4 border-t pt-3">
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={sendToWhatsApp}
+                onChange={(e) => setSendToWhatsApp(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                Send to WhatsApp (Group or Number)
+              </span>
+            </label>
+
+            {sendToWhatsApp && (
+              <div className="mt-2">
+                <input
+                  type="text"
+                  placeholder="e.g. 923001234567 or 120363049482690322@g.us"
+                  value={whatsappTarget}
+                  onChange={(e) => setWhatsappTarget(e.target.value)}
+                  className="w-full text-sm px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  aria-label="WhatsApp recipient"
+                  required
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Enter an individual phone number (with country code) or a target group JID.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="modal-actions-footer">
