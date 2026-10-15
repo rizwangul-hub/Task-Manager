@@ -218,8 +218,12 @@ taskSchema.index(
   { unique: true, sparse: true, name: 'whatsapp_message_id_unique' }
 );
 
+taskSchema.virtual('assignee').get(function () {
+  return this.assignees && this.assignees.length > 0 ? this.assignees[0] : null;
+});
+
 taskSchema.methods.toJSON = function () {
-  const task = this.toObject();
+  const task = this.toObject({ virtuals: true });
   delete task.__v;
   return task;
 };

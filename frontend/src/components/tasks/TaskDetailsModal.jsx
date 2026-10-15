@@ -121,7 +121,10 @@ export const TaskDetailsModal = ({
   const handleRetryWhatsAppNotification = async (notificationId) => {
     setRetryingNotificationId(notificationId);
     try {
-      await taskService.retryWhatsAppNotification(taskId, notificationId);
+      const response = await taskService.retryWhatsAppNotification(taskId, notificationId);
+      setWhatsappNotifications((current) => current.map((notification) =>
+        notification._id === notificationId ? response.data.notification : notification
+      ));
       toast.success('WhatsApp notification retry queued.');
       await loadWhatsAppNotifications();
     } catch (err) {

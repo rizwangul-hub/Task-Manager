@@ -900,7 +900,6 @@ export const AllTasksPage = () => {
           setDetailsTaskId(null);
         }}
         onTaskUpdated={fetchTasks}
-        users={users}
       />
 
       {/* Create Task Modal */}

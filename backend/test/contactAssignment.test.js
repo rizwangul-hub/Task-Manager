@@ -3,16 +3,20 @@ import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
 import { Contact, normalizeContactWhatsAppNumber } from '../src/models/contact.model.js';
 import { Task } from '../src/models/task.model.js';
+import { Project } from '../src/models/project.model.js';
+import { TaskEvent } from '../src/models/taskEvent.model.js';
 import {
   TaskWhatsAppNotification,
   TASK_WHATSAPP_STATUSES
 } from '../src/models/taskWhatsAppNotification.model.js';
 import { contactController } from '../src/controllers/contact.controller.js';
+import { taskController } from '../src/controllers/task.controller.js';
 import {
   createTaskAssignmentNotificationService,
   taskAssignmentNotificationService
 } from '../src/services/taskAssignmentNotification.service.js';
 import { authenticate } from '../src/middleware/auth.middleware.js';
+import { socketService } from '../src/services/socket.service.js';
 
 test('contact numbers normalize common Pakistan and UK formats to E.164', () => {
   assert.equal(normalizeContactWhatsAppNumber('+92 (0) 317-9500901'), '+923179500901');
@@ -206,6 +210,177 @@ test('outbox records provider failures, retries safely, and deduplicates assignm
   await service.enqueue(task, contact);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(sendCount, 2);
+});
+
+test('task creation persists the contact assignment before queuing WhatsApp', async () => {
+  const ownerId = new mongoose.Types.ObjectId();
+  const projectId = new mongoose.Types.ObjectId();
+  const contactId = new mongoose.Types.ObjectId();
+  const taskId = new mongoose.Types.ObjectId();
+  const contact = {
+    _id: contactId,
+    fullName: 'Ahmed Khan',
+    whatsappNumber: '+923179500901'
+  };
+  const project = {
+    _id: projectId,
+    projectKey: 'PRJ',
+    members: [],
+    async save() {}
+  };
+  const savedTask = {
+    _id: taskId,
+    taskKey: 'PRJ-1',
+    title: 'Prepare report',
+    assignees: [],
+    project: { ...project, name: 'Finance', manager: ownerId, members: [ownerId] },
+    creator: { _id: ownerId, name: 'Workspace owner' },
+    assignedContact: contact,
+    toJSON() { return this; },
+    populate() { return this; }
+  };
+  const originals = {
+    projectFindById: Project.findById,
+    contactFindOne: Contact.findOne,
+    taskCountDocuments: Task.countDocuments,
+    taskCreate: Task.create,
+    taskFindById: Task.findById,
+    taskEventLogEvent: TaskEvent.logEvent,
+    enqueue: taskAssignmentNotificationService.enqueue,
+    getIO: socketService.getIO
+  };
+  let taskWasSaved = false;
+  let queuedAfterSave = false;
+
+  try {
+    Project.findById = async () => project;
+    Contact.findOne = async () => contact;
+    Task.countDocuments = async () => 0;
+    Task.create = async (data) => {
+      taskWasSaved = true;
+      assert.equal(data.assignedContact.toString(), contactId.toString());
+      return { ...data, _id: taskId, taskKey: 'PRJ-1' };
+    };
+    Task.findById = () => savedTask;
+    TaskEvent.logEvent = async () => {};
+    socketService.getIO = () => null;
+    taskAssignmentNotificationService.enqueue = async () => {
+      queuedAfterSave = taskWasSaved;
+      return null;
+    };
+
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(payload) { this.payload = payload; return this; }
+    };
+    await taskController.createTask({
+      body: { title: 'Prepare report', project: projectId.toString(), contactId: contactId.toString() },
+      user: { _id: ownerId }
+    }, response, (error) => { throw error; });
+
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.payload.data.task.assignedContact._id.toString(), contactId.toString());
+    assert.equal(queuedAfterSave, true);
+  } finally {
+    Project.findById = originals.projectFindById;
+    Contact.findOne = originals.contactFindOne;
+    Task.countDocuments = originals.taskCountDocuments;
+    Task.create = originals.taskCreate;
+    Task.findById = originals.taskFindById;
+    TaskEvent.logEvent = originals.taskEventLogEvent;
+    taskAssignmentNotificationService.enqueue = originals.enqueue;
+    socketService.getIO = originals.getIO;
+  }
+});
+
+test('task creation failure does not enqueue a WhatsApp notification', async () => {
+  const ownerId = new mongoose.Types.ObjectId();
+  const projectId = new mongoose.Types.ObjectId();
+  const contactId = new mongoose.Types.ObjectId();
+  const originals = {
+    projectFindById: Project.findById,
+    contactFindOne: Contact.findOne,
+    taskCountDocuments: Task.countDocuments,
+    taskCreate: Task.create,
+    enqueue: taskAssignmentNotificationService.enqueue
+  };
+  let enqueueCount = 0;
+  let requestError;
+
+  try {
+    Project.findById = async () => ({ _id: projectId, projectKey: 'PRJ', members: [], async save() {} });
+    Contact.findOne = async () => ({ _id: contactId, fullName: 'Ahmed Khan', whatsappNumber: '+923179500901' });
+    Task.countDocuments = async () => 0;
+    Task.create = async () => { throw new Error('Task persistence failed.'); };
+    taskAssignmentNotificationService.enqueue = async () => { enqueueCount += 1; };
+
+    await taskController.createTask({
+      body: { title: 'Prepare report', project: projectId.toString(), contactId: contactId.toString() },
+      user: { _id: ownerId }
+    }, {}, (error) => { requestError = error; });
+
+    assert.match(requestError.message, /Task persistence failed/);
+    assert.equal(enqueueCount, 0);
+  } finally {
+    Project.findById = originals.projectFindById;
+    Contact.findOne = originals.contactFindOne;
+    Task.countDocuments = originals.taskCountDocuments;
+    Task.create = originals.taskCreate;
+    taskAssignmentNotificationService.enqueue = originals.enqueue;
+  }
+});
+
+test('replayed task creation keys return the existing task without creating a second task', async () => {
+  const ownerId = new mongoose.Types.ObjectId();
+  const taskId = new mongoose.Types.ObjectId();
+  const contactId = new mongoose.Types.ObjectId();
+  const existingTask = {
+    _id: taskId,
+    assignedContact: { _id: contactId, fullName: 'Ahmed Khan', whatsappNumber: '+923179500901' },
+    toJSON() { return this; },
+    populate() { return this; }
+  };
+  const originals = {
+    taskFindOne: Task.findOne,
+    taskCreate: Task.create,
+    getForTask: taskAssignmentNotificationService.getForTask,
+    enqueue: taskAssignmentNotificationService.enqueue
+  };
+  let createCount = 0;
+  let enqueueCount = 0;
+
+  try {
+    Task.findOne = () => existingTask;
+    Task.create = async () => { createCount += 1; };
+    taskAssignmentNotificationService.getForTask = async () => [];
+    taskAssignmentNotificationService.enqueue = async () => { enqueueCount += 1; };
+
+    const response = {
+      statusCode: 200,
+      status(code) { this.statusCode = code; return this; },
+      json(payload) { this.payload = payload; return this; }
+    };
+    await taskController.createTask({
+      body: {
+        title: 'Prepare report',
+        project: new mongoose.Types.ObjectId().toString(),
+        contactId: contactId.toString(),
+        idempotencyKey: 'stable-request-id'
+      },
+      user: { _id: ownerId }
+    }, response, (error) => { throw error; });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.payload.data.task._id.toString(), taskId.toString());
+    assert.equal(createCount, 0);
+    assert.equal(enqueueCount, 1);
+  } finally {
+    Task.findOne = originals.taskFindOne;
+    Task.create = originals.taskCreate;
+    taskAssignmentNotificationService.getForTask = originals.getForTask;
+    taskAssignmentNotificationService.enqueue = originals.enqueue;
+  }
 });
 
 test('authentication rejects contact API requests without a login token', async () => {

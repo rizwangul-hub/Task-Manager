@@ -104,6 +104,13 @@ userSchema.pre('init', function (document) {
   document.role = normalizeUserRole(document.role);
 });
 
+userSchema.pre('save', function (next) {
+  if (this.whatsappNumber) {
+    this.whatsappNumber = this.whatsappNumber.replace(/[\s\-()]/g, '').replace(/\D/g, '') || null;
+  }
+  next();
+});
+
 // Indexes
 userSchema.index({ role: 1 });
 userSchema.index({ isActive: 1 });

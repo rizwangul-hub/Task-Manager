@@ -17,6 +17,7 @@ import {
   X
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
+import { formatWhatsAppNumber } from '../../utils/phone';
 
 const STATUS_OPTIONS = [
   { label: 'Backlog', value: 'Backlog', color: 'gray' },
@@ -363,7 +364,7 @@ const TaskBoard = ({
                               </td>
                               {visibleCols.assignees && (
                                 <td className="board-cell-popover">
-                                  <button type="button" className="board-assignee-trigger" aria-label={`Assign people to ${task.title}`} disabled={!canManage} onClick={() => {
+                                  <button type="button" className="board-assignee-trigger" aria-label={`Assign contact to ${task.title}`} disabled={!canManage} onClick={() => {
                                     setOpenPopover(popoverId === 'assignees' ? null : { taskId: task._id, type: 'assignees' });
                                     setContactSearch('');
                                   }}>
@@ -384,7 +385,7 @@ const TaskBoard = ({
                                           return <button type="button" key={contact._id} onClick={() => {
                                             setOpenPopover(null);
                                             if (!selected) void onUpdateTask(task, { contactId: contact._id });
-                                          }}><span className="board-avatar">{getInitials(contact.fullName)}</span><span>{contact.fullName} · {contact.whatsappNumber}</span>{selected && <Check size={15} />}</button>;
+                                          }}><span className="board-avatar">{getInitials(contact.fullName)}</span><span>{contact.fullName} · {formatWhatsAppNumber(contact.whatsappNumber)}</span>{selected && <Check size={15} />}</button>;
                                         })}
                                         {contacts.every((contact) => !contact.isActive) && <p>No active contacts. Add one from Contacts.</p>}
                                       </div>
