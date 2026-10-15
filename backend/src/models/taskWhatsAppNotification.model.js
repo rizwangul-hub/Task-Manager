@@ -4,6 +4,7 @@ export const TASK_WHATSAPP_STATUSES = {
   PENDING: 'pending',
   PROCESSING: 'processing',
   SENT: 'sent',
+  DELIVERED: 'delivered',
   FAILED: 'failed'
 };
 
@@ -45,6 +46,7 @@ const taskWhatsAppNotificationSchema = new mongoose.Schema(
     },
     attempts: { type: Number, default: 0 },
     sentAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
     processingStartedAt: { type: Date, default: null },
     failureReason: { type: String, default: null },
     nextAttemptAt: { type: Date, default: Date.now }

@@ -7,7 +7,6 @@ import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { notificationService } from '../services/notification.service.js';
 import { socketService } from '../services/socket.service.js';
 import { taskAssignmentNotificationService } from '../services/taskAssignmentNotification.service.js';
-import { sendWhatsAppTaskNotification } from '../services/whatsappService.js';
 import { buildCsvString } from '../utils/csv.js';
 import { AppError } from '../middleware/errorHandler.js';
 
@@ -427,42 +426,6 @@ export const taskController = {
           populated.assignees.map((a) => a._id || a)
         );
 
-        // Outbound WhatsApp Dispatch for assigned workspace users
-        for (const member of populated.assignees) {
-          const rawPhone = member.whatsappNumber || member.phone;
-          if (rawPhone && typeof rawPhone === 'string' && rawPhone.trim()) {
-            console.info(
-              `[TASK_ASSIGNMENT] Assignee ${member.name} selected with number ${rawPhone}`
-            );
-            const dueDateFormatted = populated.dueDate
-              ? new Date(populated.dueDate).toLocaleDateString('en-GB', {
-                  day: 'numeric',
-                  month: 'short',
-                  year: 'numeric'
-                })
-              : 'No deadline';
-            const messageCard = [
-              `📌 *New Deliverable Assigned: ${populated.title}*`,
-              `*Board / Project*: ${populated.project?.name || populated.project?.title || 'Project'}`,
-              `*Priority*: ${populated.priority}`,
-              `*Due Date*: ${dueDateFormatted}`,
-              populated.description ? `*Description*: ${populated.description}` : '',
-              '',
-              `_PixxTechnologiees Task Manager_`
-            ].filter(Boolean).join('\n');
-
-            // Fire-and-forget promise pattern so HTTP response is never blocked or delayed
-            sendWhatsAppTaskNotification(rawPhone, messageCard, { taskTitle: populated.title })
-              .then(async (result) => {
-                if (result?.success) {
-                  await Task.updateOne({ _id: task._id }, { $set: { whatsappNotificationSent: true } });
-                }
-              })
-              .catch((err) => {
-                console.error(`[WA_OUTBOUND_ERROR] Failed async send to ${member.name}:`, err?.message || err);
-              });
-          }
-        }
       }
 
       if (assignedContact) {

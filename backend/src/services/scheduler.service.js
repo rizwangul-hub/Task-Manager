@@ -6,11 +6,9 @@ import { notificationService } from './notification.service.js';
 import { emailService } from './email.service.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
-import { processWhatsAppQueue } from '../controllers/whatsappWebhook.controller.js';
 import { taskAssignmentNotificationService } from './taskAssignmentNotification.service.js';
 
 let cronTask = null;
-let whatsappQueueTimer = null;
 let taskWhatsAppOutboxTimer = null;
 
 export async function checkDeadlinesAndOverdue() {
@@ -294,22 +292,10 @@ export const schedulerService = {
 
   /**
    * Start recurring background worker
-   */
-  startScheduler: () => {
-    if (!whatsappQueueTimer) {
-      const runWhatsAppQueue = () => {
-        void processWhatsAppQueue().catch((error) => {
-          logger.error('[WHATSAPP_QUEUE] Intake queue processing failed:', error);
-        });
-      };
-      runWhatsAppQueue();
-      whatsappQueueTimer = setInterval(runWhatsAppQueue, 30 * 1000);
-      whatsappQueueTimer.unref?.();
-      logger.info('[WHATSAPP_QUEUE] Persistent intake worker started.');
-    }
-
-    if (!taskWhatsAppOutboxTimer) {
-      const processTaskWhatsAppOutbox = () => {
+    */
+   startScheduler: () => {
+     if (!taskWhatsAppOutboxTimer) {
+       const processTaskWhatsAppOutbox = () => {
         void taskAssignmentNotificationService.processPending().catch((error) => {
           logger.error('[WA_OUTBOX] Pending assignment notification processing failed:', error);
         });
@@ -351,13 +337,9 @@ export const schedulerService = {
 
   /**
    * Stop background scheduler
-   */
-  stopScheduler: () => {
-    if (whatsappQueueTimer) {
-      clearInterval(whatsappQueueTimer);
-      whatsappQueueTimer = null;
-    }
-    if (taskWhatsAppOutboxTimer) {
+    */
+   stopScheduler: () => {
+     if (taskWhatsAppOutboxTimer) {
       clearInterval(taskWhatsAppOutboxTimer);
       taskWhatsAppOutboxTimer = null;
     }

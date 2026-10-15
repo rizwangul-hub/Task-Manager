@@ -137,21 +137,8 @@ export const env = {
     timezone: process.env.SCHEDULER_TIMEZONE || 'UTC'
   },
   WHATSAPP: {
-    provider: process.env.WHATSAPP_PROVIDER || 'auto',
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
-    appSecret: process.env.WHATSAPP_APP_SECRET || '',
-    groupId: process.env.PIXX_WHATSAPP_GROUP_ID || process.env.WHATSAPP_GROUP_ID || '',
-    taskNotificationJid: process.env.WHATSAPP_TASK_NOTIFICATION_JID || '',
     authInfoPath: process.env.AUTH_INFO_PATH || './auth_info_baileys',
-    accessToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_API_TOKEN || '',
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
-    graphApiVersion: process.env.WHATSAPP_GRAPH_API_VERSION || 'v22.0',
-    twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || '',
-    twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || '',
-    webhookSecret: process.env.WHATSAPP_WEBHOOK_SECRET || '',
-    maxMediaBytes: parseInt(process.env.WHATSAPP_MAX_MEDIA_BYTES, 10) || 10 * 1024 * 1024,
-    defaultProjectId: process.env.WHATSAPP_DEFAULT_PROJECT_ID || '',
-    defaultAssigneeId: process.env.WHATSAPP_DEFAULT_ASSIGNEE_ID || ''
+    maxMediaBytes: parseInt(process.env.WHATSAPP_MAX_MEDIA_BYTES, 10) || 10 * 1024 * 1024
   }
 };
 

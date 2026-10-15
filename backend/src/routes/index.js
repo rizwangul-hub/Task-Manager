@@ -9,6 +9,7 @@ import dashboardRoutes from './dashboard.routes.js';
 import reportRoutes from './report.routes.js';
 import whatsappWebhookRoutes from './whatsappWebhook.routes.js';
 import contactRoutes from './contact.routes.js';
+import whatsappRoutes from './whatsapp.routes.js';
 
 const router = Router();
 
@@ -26,6 +27,7 @@ router.use('/tasks', taskRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/reports', reportRoutes);
+router.use('/whatsapp', whatsappRoutes);
 
 // Informational API descriptor
 router.get('/', (req, res) => {
@@ -42,6 +44,7 @@ router.get('/', (req, res) => {
       tasks: '/api/tasks',
       notifications: '/api/notifications',
       whatsappWebhook: '/api/webhook/whatsapp',
+      whatsapp: '/api/whatsapp',
       dashboard: '/api/dashboard/stats',
       reports: '/api/reports/summary'
     }
