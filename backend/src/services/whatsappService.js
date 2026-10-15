@@ -493,9 +493,9 @@ const normalizeWhatsAppPhoneNumber = (target) => {
  * Individual numbers are resolved by WhatsApp first so Baileys can use the
  * registered JID (including LID addresses where applicable).
  */
-export async function sendWhatsAppTaskNotification(target, messageText) {
-  if (!sock) {
-    logger.error('[WA_OUTBOUND] Cannot send: Baileys socket is NOT connected.');
+export async function sendWhatsAppTaskNotification(target, messageText, { taskTitle = '' } = {}) {
+  if (!sock || !sock.user || sock.ws?.readyState !== 1) {
+    logger.warn('[WA_OUTBOUND] Cannot send: Baileys socket is not authenticated and connected.');
     return { success: false, reason: 'Socket not connected' };
   }
 
@@ -513,10 +513,10 @@ export async function sendWhatsAppTaskNotification(target, messageText) {
     const trimmedTarget = target.trim();
     let targetJid;
 
-    if (trimmedTarget.endsWith('@g.us')) {
-      if (!/^\d+@g\.us$/.test(trimmedTarget)) {
+    if (trimmedTarget.endsWith('@g.us') || trimmedTarget.endsWith('@s.whatsapp.net')) {
+      if (!/^\d+@(g\.us|s\.whatsapp\.net)$/.test(trimmedTarget)) {
         logger.warn('[WA_OUTBOUND] Cannot send: group JID is invalid.');
-        return { success: false, reason: 'Invalid group JID' };
+        return { success: false, reason: 'Invalid WhatsApp JID' };
       }
       targetJid = trimmedTarget;
     } else {
@@ -526,6 +526,7 @@ export async function sendWhatsAppTaskNotification(target, messageText) {
         return { success: false, reason: 'Invalid phone number' };
       }
 
+      logger.info(`[WA_OUTBOUND] Verifying contact with Baileys for task "${taskTitle || 'task assignment'}".`);
       const matches = await sock.onWhatsApp(cleanDigits);
       const registeredAccount = matches?.find((match) => match?.exists && match?.jid);
       if (!registeredAccount) {
@@ -535,9 +536,9 @@ export async function sendWhatsAppTaskNotification(target, messageText) {
       targetJid = registeredAccount.jid;
     }
 
-    logger.info(`[WA_OUTBOUND] Sending task notification to ${targetJid}.`);
+    logger.info(`[WA_OUTBOUND] Sending task "${taskTitle || 'assignment notification'}" to ${targetJid}.`);
     const sent = await sock.sendMessage(targetJid, { text: messageText.trim() });
-    logger.info(`[WA_OUTBOUND_SUCCESS] Message delivered to ${targetJid}.`);
+    logger.info(`[WA_OUTBOUND_SUCCESS] Delivered assignment message for "${taskTitle || 'task'}" to ${targetJid}.`);
     return { success: true, messageId: sent?.key?.id };
   } catch (error) {
     logger.error(`[WA_OUTBOUND_ERROR] Failed to send WhatsApp message: ${error.message}`);

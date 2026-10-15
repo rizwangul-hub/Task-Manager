@@ -1,4 +1,4 @@
-import { User, USER_ROLES, normalizeUserRole } from '../models/user.model.js';
+import { User, USER_ROLES, normalizeUserRole, normalizeWhatsAppNumber } from '../models/user.model.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 export const userController = {
@@ -105,6 +105,10 @@ export const userController = {
         (avatar !== undefined && typeof avatar !== 'string')) {
       return next(new AppError('Phone, WhatsApp number, and avatar values must be strings.', 400));
     }
+    const normalizedWhatsAppNumber = normalizeWhatsAppNumber(whatsappNumber);
+    if (normalizedWhatsAppNumber && !/^\d{10,15}$/.test(normalizedWhatsAppNumber)) {
+      return next(new AppError('WhatsApp number must contain between 10 and 15 digits.', 400));
+    }
     if (password.length < 8) {
       return next(new AppError('Password must be at least 8 characters long.', 400));
     }
@@ -127,9 +131,7 @@ export const userController = {
         passwordHash: await User.hashPassword(password),
         role: requestedRole,
         phone: phone || '',
-        whatsappNumber: typeof whatsappNumber === 'string' && whatsappNumber.trim()
-          ? whatsappNumber.trim()
-          : null,
+        whatsappNumber: normalizedWhatsAppNumber,
         avatar: avatar || ''
       });
 
@@ -152,8 +154,13 @@ export const userController = {
     const { name, email, phone, whatsappNumber, avatar } = req.body || {};
 
     try {
-      if (req.user._id.toString() !== id) {
+      const isSelf = req.user._id.toString() === id;
+      const isManager = [USER_ROLES.ADMIN, USER_ROLES.MANAGER].includes(req.user.role);
+      if (!isSelf && !isManager) {
         return next(new AppError('Access forbidden: You cannot modify other user accounts.', 403));
+      }
+      if (!isSelf && Object.keys(req.body || {}).some((field) => field !== 'whatsappNumber')) {
+        return next(new AppError('Managers may only update another user’s WhatsApp number.', 403));
       }
 
       const user = await User.findById(id);
@@ -175,9 +182,11 @@ export const userController = {
         if (whatsappNumber !== null && typeof whatsappNumber !== 'string') {
           return next(new AppError('WhatsApp number must be a string or null.', 400));
         }
-        user.whatsappNumber = typeof whatsappNumber === 'string' && whatsappNumber.trim()
-          ? whatsappNumber.trim()
-          : null;
+        const normalizedWhatsAppNumber = normalizeWhatsAppNumber(whatsappNumber);
+        if (normalizedWhatsAppNumber && !/^\d{10,15}$/.test(normalizedWhatsAppNumber)) {
+          return next(new AppError('WhatsApp number must contain between 10 and 15 digits.', 400));
+        }
+        user.whatsappNumber = normalizedWhatsAppNumber;
       }
       if (avatar !== undefined) {
         if (typeof avatar !== 'string') return next(new AppError('Avatar must be a string.', 400));

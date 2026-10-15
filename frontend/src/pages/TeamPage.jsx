@@ -44,6 +44,8 @@ export const TeamPage = () => {
   const [formWhatsAppNumber, setFormWhatsAppNumber] = useState('');
   const [profileWhatsAppNumber, setProfileWhatsAppNumber] = useState(user?.whatsappNumber || '');
   const [savingProfile, setSavingProfile] = useState(false);
+  const [whatsappNumberEdits, setWhatsAppNumberEdits] = useState({});
+  const [savingWhatsAppUserId, setSavingWhatsAppUserId] = useState(null);
   const [formError, setFormError] = useState('');
 
   const fetchUsers = useCallback(async () => {
@@ -130,6 +132,20 @@ export const TeamPage = () => {
     }
   };
 
+  const handleSaveTeamWhatsApp = async (teamUser) => {
+    setSavingWhatsAppUserId(teamUser._id);
+    try {
+      const whatsappNumber = whatsappNumberEdits[teamUser._id] ?? teamUser.whatsappNumber ?? '';
+      await userService.updateUser(teamUser._id, { whatsappNumber: whatsappNumber.trim() || null });
+      await fetchUsers();
+      toast.success(`WhatsApp number updated for ${teamUser.name}.`);
+    } catch (err) {
+      toast.error(err.message || 'Could not update WhatsApp number.');
+    } finally {
+      setSavingWhatsAppUserId(null);
+    }
+  };
+
   const pageActions = canManageUsers && (
     <Button variant="primary" size="md" icon={UserPlus} onClick={handleOpenCreate}>
       Add Team Member
@@ -151,13 +167,18 @@ export const TeamPage = () => {
         </div>
         <FormField
           id="profile-whatsapp-number"
-          label="WhatsApp number"
+          label="WhatsApp Phone Number (with Country Code)"
           type="tel"
-          placeholder="e.g. 923001234567 or +447123456789"
+          placeholder="e.g. 923179500901 or 447123456789"
           value={profileWhatsAppNumber}
           onChange={(e) => setProfileWhatsAppNumber(e.target.value)}
-          helperText="Include the country code. Assigned tasks will be sent to this number when it is registered on WhatsApp."
+          helperText="Used for automated task assignment alerts. Enter 10–15 digits; separators are removed when saved."
         />
+        <p className="text-sm text-gray-600">
+          {profileWhatsAppNumber.trim()
+            ? '📱 WhatsApp number linked'
+            : 'WhatsApp number not linked'}
+        </p>
         <div className="modal-actions-right">
           <Button type="submit" variant="primary" isLoading={savingProfile}>
             Save WhatsApp Number
@@ -261,7 +282,34 @@ export const TeamPage = () => {
                       <span>{item.email}</span>
                     </div>
                   </td>
-                  <td>{item.whatsappNumber || 'Not set'}</td>
+                  <td>
+                    {canManageUsers && item._id !== user?._id ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="tel"
+                          aria-label={`WhatsApp number for ${item.name}`}
+                          placeholder="Country code + number"
+                          value={whatsappNumberEdits[item._id] ?? item.whatsappNumber ?? ''}
+                          onChange={(e) => setWhatsAppNumberEdits((current) => ({
+                            ...current,
+                            [item._id]: e.target.value
+                          }))}
+                          className="input-field"
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          isLoading={savingWhatsAppUserId === item._id}
+                          onClick={() => handleSaveTeamWhatsApp(item)}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    ) : (
+                      item.whatsappNumber || 'Not set'
+                    )}
+                  </td>
                   <td>
                     <span className={`role-badge role-${item.role.toLowerCase()}`}>
                       <Shield size={12} />

@@ -286,9 +286,25 @@ export const taskController = {
       });
 
       const populated = await Task.findById(task._id)
-        .populate('project', 'name projectKey manager')
+        .populate('project', 'name projectKey manager members')
         .populate('creator', 'name email')
         .populate('assignees', 'name email role phone whatsappNumber');
+
+      const taskPayload = populated.toJSON();
+      const getUserId = (userRef) => userRef?._id?.toString() || userRef?.toString();
+      const authorizedUserIds = new Set([
+        getUserId(populated.creator),
+        ...(populated.assignees || []).map(getUserId),
+        getUserId(populated.project?.manager),
+        ...(populated.project?.members || []).map(getUserId)
+      ].filter(Boolean));
+      if (socketService.getIO()) {
+        for (const userId of authorizedUserIds) {
+          socketService.emitUserEvent(userId, 'task:created', taskPayload);
+        }
+      } else {
+        console.warn(`[SOCKET_EMIT] Socket.IO is unavailable for created task ${populated.taskKey}.`);
+      }
 
       // Dispatch notifications to assignees
       if (populated.assignees && populated.assignees.length > 0) {
@@ -303,15 +319,13 @@ export const taskController = {
         ? new Date(populated.dueDate).toLocaleDateString()
         : 'Not set';
       const whatsAppTaskMessage = [
-        '📌 *New Task Created*',
-        `*Task:* ${populated.title}`,
-        `*Key:* ${populated.taskKey}`,
-        `*Board:* ${populated.project?.name || 'Project'}`,
+        `📌 *New Deliverable Assigned: ${populated.title}*`,
+        `*Board / Project:* ${populated.project?.name || 'Project'}`,
         `*Priority:* ${populated.priority}`,
-        `*Due Date:* ${dueDateText}`,
-        `*Created By:* ${req.user?.name || 'User'}`,
-        `*Assigned To:* ${populated.assignees?.map((a) => a.name || a.email).join(', ') || 'Unassigned'}`
-      ].join('\n');
+        `*Due Date:* ${dueDateText === 'Not set' ? 'No deadline' : dueDateText}`,
+        populated.description ? `*Description / Acceptance Criteria:*\n${populated.description}` : null,
+        '_PixxTechnologiees Task Manager_'
+      ].filter(Boolean).join('\n\n');
 
       const hasWhatsAppPreference = Object.prototype.hasOwnProperty.call(req.body, 'sendToWhatsApp');
       const targetJid = hasWhatsAppPreference
@@ -339,7 +353,23 @@ export const taskController = {
         }
       }
       for (const target of whatsappTargets) {
-        void sendWhatsAppTaskNotification(target, whatsAppTaskMessage);
+        const assigneeName = (populated.assignees || []).find((taskAssignee) =>
+          (taskAssignee.whatsappNumber || taskAssignee.phone || '').trim() === target
+        )?.name;
+        console.info(
+          `[TASK_ASSIGNMENT] Assignee ${assigneeName || 'recipient'} selected with number ${target}`
+        );
+        void sendWhatsAppTaskNotification(target, whatsAppTaskMessage, { taskTitle: populated.title })
+          .then(async (result) => {
+            if (!result.success) return;
+            await Task.updateOne(
+              { _id: task._id },
+              { $set: { whatsappNotificationSent: true } }
+            );
+          })
+          .catch((error) => {
+            console.error(`[WA_OUTBOUND_ERROR] Failed to record task ${task.taskKey} notification status:`, error);
+          });
       }
 
       res.status(201).json({

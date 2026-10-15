@@ -44,6 +44,14 @@ test('WhatsApp task schema defaults and source enum', async () => {
       passwordHash: 'test-hash'
     });
     assert.equal(withoutNumber.whatsappNumber, null);
+
+    const invalidNumberUser = new User({
+      name: 'Invalid Number User',
+      email: 'invalid-whatsapp-user@example.com',
+      passwordHash: 'test-hash',
+      whatsappNumber: '12345'
+    });
+    await assert.rejects(invalidNumberUser.validate(), /between 10 and 15 digits/);
   });
 
   assert.equal(task.title, 'WhatsApp intake');
@@ -53,6 +61,7 @@ test('WhatsApp task schema defaults and source enum', async () => {
   assert.equal(task.reminderSent, false);
   assert.equal(task.deadlineAlertSent, false);
   assert.equal(task.overdueAlertSent, false);
+  assert.equal(task.whatsappNotificationSent, false);
   assert.equal(task.priority, 'Medium');
 
   task.source = TASK_SOURCES.WHATSAPP;

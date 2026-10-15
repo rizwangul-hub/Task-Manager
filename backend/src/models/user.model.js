@@ -1,6 +1,12 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
+export const normalizeWhatsAppNumber = (value) => {
+  if (typeof value !== 'string') return null;
+  const digits = value.replace(/\D/g, '');
+  return digits || null;
+};
+
 export const USER_ROLES = {
   ADMIN: 'Admin',
   MANAGER: 'Manager',
@@ -57,9 +63,12 @@ const userSchema = new mongoose.Schema(
     },
     whatsappNumber: {
       type: String,
-      trim: true,
       default: null,
-      maxlength: [32, 'WhatsApp number cannot exceed 32 characters']
+      set: normalizeWhatsAppNumber,
+      validate: {
+        validator: (value) => value == null || /^\d{10,15}$/.test(value),
+        message: 'WhatsApp number must contain between 10 and 15 digits.'
+      }
     },
     role: {
       type: String,

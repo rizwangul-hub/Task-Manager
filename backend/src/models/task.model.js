@@ -122,6 +122,10 @@ const taskSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    whatsappNotificationSent: {
+      type: Boolean,
+      default: false
+    },
     customFields: [
       {
         key: { type: String, required: true, trim: true },
