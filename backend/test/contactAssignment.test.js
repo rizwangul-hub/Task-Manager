@@ -524,7 +524,7 @@ test('task field edits do not notify again, but contact reassignment queues a ne
     await taskController.updateTask({
       params: { id: taskId.toString() },
       body: { title: 'Updated title', priority: 'High' },
-      user: { _id: ownerId, role: 'ADMIN' }
+      user: { _id: ownerId, role: 'Admin' }
     }, unrelatedResponse, (error) => { throw error; });
     assert.equal(enqueueCount, 0);
 
@@ -540,7 +540,7 @@ test('task field edits do not notify again, but contact reassignment queues a ne
     await taskController.updateTask({
       params: { id: taskId.toString() },
       body: { contactId: nextContactId.toString() },
-      user: { _id: ownerId, role: 'ADMIN' }
+      user: { _id: ownerId, role: 'Admin' }
     }, reassignmentResponse, (error) => { throw error; });
 
     assert.equal(enqueueCount, 1);

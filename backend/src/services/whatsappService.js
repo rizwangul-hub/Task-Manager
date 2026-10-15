@@ -35,6 +35,12 @@ const redactPhoneNumber = (value) => String(value || '').replace(/\+?\d[\d\s().-
 const redactError = (error) => redactPhoneNumber(error?.message || error || 'Unknown WhatsApp error')
   .replace(/[0-9a-fA-F]{24,}/g, '[REDACTED_ID]');
 
+let sock = null;
+
+export function getWhatsAppSocket() {
+  return sock || global.waSock || null;
+}
+
 export const createWhatsAppService = ({
   socketFactory = makeWASocket,
   authStateFactory = useMultiFileAuthState,
@@ -44,7 +50,7 @@ export const createWhatsAppService = ({
   sendReadyTimeoutMs = 20_000,
   reconnectDelaysMs = [5_000, 10_000, 20_000, 40_000, 60_000]
 } = {}) => {
-  let sock = null;
+  let instanceSock = null;
   let connectionState = CONNECTION_STATES.DISCONNECTED;
   let initializationPromise = null;
   let reconnectTimer = null;
@@ -57,10 +63,14 @@ export const createWhatsAppService = ({
   let lastError = null;
   const connectionWaiters = new Set();
 
-  const isReady = () =>
-    connectionState === CONNECTION_STATES.CONNECTED &&
-    Boolean(sock?.user) &&
-    sock?.ws?.readyState === 1;
+  const isReady = () => {
+    const s = instanceSock || sock || global.waSock;
+    return (
+      connectionState === CONNECTION_STATES.CONNECTED &&
+      Boolean(s?.user) &&
+      (s?.ws?.readyState === undefined || s?.ws?.readyState === 1)
+    );
+  };
 
   const notifyWaiters = () => {
     for (const waiter of connectionWaiters) waiter();
@@ -127,7 +137,7 @@ export const createWhatsAppService = ({
 
   const initialize = async () => {
     if (initializationPromise) return initializationPromise;
-    if (sock) return sock;
+    if (instanceSock) return instanceSock;
     if (stopped) return null;
     if (authStateLoadFailed) return null;
     if (process.env.ENABLE_WHATSAPP === 'false' || process.env.WHATSAPP_ENABLED === 'false') {
@@ -153,7 +163,9 @@ export const createWhatsAppService = ({
           syncFullHistory: false,
           getMessage: async () => ({ conversation: '' })
         });
+        instanceSock = newSock;
         sock = newSock;
+        global.waSock = newSock;
 
         newSock.ev.on('creds.update', () => {
           void saveCreds().catch((error) => {
@@ -170,7 +182,7 @@ export const createWhatsAppService = ({
         });
 
         newSock.ev.on('connection.update', (update) => {
-          if (sock !== newSock) return;
+          if (instanceSock !== newSock) return;
 
           if (update.qr && !authenticationValid) {
             serviceLogger.info('[WA] No paired session found; scan the QR code to connect WhatsApp:');
@@ -183,6 +195,9 @@ export const createWhatsAppService = ({
             lastConnectionAt = new Date();
             lastError = null;
             reconnectAttempt = 0;
+            sock = newSock;
+            global.waSock = newSock;
+            console.log('✅ [WA_SERVICE] WhatsApp socket successfully connected and globally stored.');
             serviceLogger.info('[WA] Baileys connected and authenticated for assignment notifications.');
             notifyWaiters();
           }
@@ -190,7 +205,9 @@ export const createWhatsAppService = ({
           if (update.connection === 'close') {
             const statusCode = update.lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = statusCode === loggedOutCode;
-            sock = null;
+            if (sock === newSock) sock = null;
+            if (global.waSock === newSock) global.waSock = null;
+            instanceSock = null;
             authenticationValid = false;
             connectionState = isLoggedOut
               ? CONNECTION_STATES.LOGGED_OUT
@@ -206,7 +223,9 @@ export const createWhatsAppService = ({
 
         return newSock;
       } catch (error) {
-        sock = null;
+        if (sock === instanceSock) sock = null;
+        if (global.waSock === instanceSock) global.waSock = null;
+        instanceSock = null;
         authenticationValid = false;
         connectionState = CONNECTION_STATES.DISCONNECTED;
         lastError = redactError(error);
@@ -257,61 +276,75 @@ export const createWhatsAppService = ({
 
   const sendWhatsAppTaskNotification = async (target, messageText, { taskTitle = '' } = {}) => {
     if (typeof target !== 'string' || !target.trim()) {
-      return { success: false, retryable: false, reason: 'Recipient not configured' };
+      return { success: false, retryable: false, reason: 'Recipient not configured', error: 'Recipient not configured' };
     }
     if (typeof messageText !== 'string' || !messageText.trim()) {
-      return { success: false, retryable: false, reason: 'Message text is empty' };
+      return { success: false, retryable: false, reason: 'Message text is empty', error: 'Message text is empty' };
     }
 
-    const trimmedTarget = target.trim();
-    const isJid = trimmedTarget.endsWith('@g.us') || trimmedTarget.endsWith('@s.whatsapp.net');
-    let cleanDigits = '';
-    if (isJid) {
-      if (!/^\d+@(g\.us|s\.whatsapp\.net)$/.test(trimmedTarget)) {
-        return { success: false, retryable: false, reason: 'Invalid WhatsApp JID' };
-      }
-    } else {
-      cleanDigits = normalizeWhatsAppPhoneNumber(trimmedTarget);
-      if (!cleanDigits) {
-        return { success: false, retryable: false, reason: 'Invalid phone number' };
+    let activeSock = getWhatsAppSocket() || instanceSock || sock;
+    if (!activeSock || (activeSock.ws && activeSock.ws.readyState !== 1)) {
+      if (typeof waitForReady === 'function') {
+        const ready = await waitForReady();
+        if (ready) {
+          activeSock = getWhatsAppSocket() || instanceSock || sock;
+        }
       }
     }
 
-    serviceLogger.info(`[WA_SEND_ATTEMPT] Assignment notification for "${taskTitle || 'task'}" started.`);
-    if (!(await waitForReady())) {
-      const reason = connectionState === CONNECTION_STATES.LOGGED_OUT
-        ? 'WhatsApp session is logged out; re-pair the existing account.'
-        : authStateLoadFailed
-          ? 'Baileys authentication state could not be loaded; check AUTH_INFO_PATH and restart.'
-        : 'WhatsApp socket is not ready; notification will be retried.';
-      const retryable = connectionState !== CONNECTION_STATES.LOGGED_OUT && !authStateLoadFailed && !stopped;
-      lastError = reason;
-      serviceLogger.warn(`[WA_SEND_RESULT] Send not attempted: ${reason}`);
-      return { success: false, retryable, reason };
+    if (!activeSock) {
+      console.error('❌ [WA_OUTBOUND] Socket not connected: global.waSock is null.');
+      return { success: false, retryable: true, reason: 'Socket not connected', error: 'Socket not connected' };
     }
 
     try {
-      let targetJid = trimmedTarget;
-      if (!isJid) {
-        const matches = await sock.onWhatsApp(cleanDigits);
-        const registeredAccount = matches?.find((match) => match?.exists && match?.jid);
-        if (!registeredAccount) {
-          lastError = 'Recipient number is not registered on WhatsApp.';
-          serviceLogger.warn('[WA_SEND_RESULT] Recipient validation failed; no message sent.');
-          return { success: false, retryable: false, reason: lastError };
+      let targetJid = target.trim();
+
+      // Format raw phone number into clean international digits
+      if (!targetJid.endsWith('@g.us') && !targetJid.endsWith('@s.whatsapp.net')) {
+        let digits = targetJid.replace(/[^0-9]/g, '');
+
+        if (digits.startsWith('03') && digits.length === 11) {
+          digits = '92' + digits.slice(1);
         }
-        targetJid = registeredAccount.jid;
+        if (digits.startsWith('07') && digits.length === 11) {
+          digits = '44' + digits.slice(1);
+        }
+        if (digits.startsWith('00')) {
+          digits = digits.slice(2);
+        }
+        if (digits.startsWith('920') || digits.startsWith('440')) {
+          digits = digits.slice(0, 2) + digits.slice(3);
+        }
+
+        if (!/^\d{7,15}$/.test(digits)) {
+          return { success: false, retryable: false, reason: 'Invalid phone number', error: 'Invalid phone number' };
+        }
+
+        // Query registered JID on WhatsApp
+        const results = await activeSock.onWhatsApp(digits);
+        const match = Array.isArray(results) ? results.find((r) => r?.exists && r?.jid) : results?.[0];
+        if (!match || !match.exists) {
+          console.error(`❌ [WA_OUTBOUND] Number ${digits} is not registered on WhatsApp.`);
+          return { success: false, retryable: false, reason: 'Number not on WhatsApp', error: 'Number not on WhatsApp' };
+        }
+        targetJid = match.jid;
+      } else {
+        if (!/^\d+@(g\.us|s\.whatsapp\.net)$/.test(targetJid)) {
+          return { success: false, retryable: false, reason: 'Invalid WhatsApp JID', error: 'Invalid WhatsApp JID' };
+        }
       }
 
-      const sent = await sock.sendMessage(targetJid, { text: messageText.trim() });
+      console.log(`📤 [WA_OUTBOUND] Dispatching message to ${targetJid}...`);
+      const sent = await activeSock.sendMessage(targetJid, { text: messageText.trim() });
+      console.log(`✅ [WA_OUTBOUND_SUCCESS] Message delivered to ${targetJid}`);
       lastSuccessfulSendAt = new Date();
       lastError = null;
-      serviceLogger.info(`[WA_SEND_RESULT] Message accepted by Baileys; messageId=${sent?.key?.id || 'unknown'}.`);
       return { success: true, messageId: sent?.key?.id };
-    } catch (error) {
-      lastError = redactError(error);
-      serviceLogger.error(`[WA_SEND_RESULT] Send failed: ${lastError}`);
-      return { success: false, retryable: true, error: lastError };
+    } catch (err) {
+      console.error('❌ [WA_OUTBOUND_EXCEPTION]:', err.message);
+      lastError = err.message;
+      return { success: false, retryable: true, reason: err.message, error: err.message };
     }
   };
 
@@ -323,8 +356,10 @@ export const createWhatsAppService = ({
     }
     connectionState = CONNECTION_STATES.STOPPED;
     notifyWaiters();
-    const activeSocket = sock;
-    sock = null;
+    const activeSocket = instanceSock || sock;
+    if (sock === activeSocket) sock = null;
+    if (global.waSock === activeSocket) global.waSock = null;
+    instanceSock = null;
     if (!activeSocket) return;
     try {
       activeSocket.ev.removeAllListeners();

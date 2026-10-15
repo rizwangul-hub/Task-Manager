@@ -575,8 +575,10 @@ export const TaskDetailsModal = ({
                             <strong>Status:</strong>
                             {notification.status === 'delivered' ? (
                               <StatusBadge status="completed" label="✓ Delivered" size="sm" />
-                            ) : notification.status === 'sent' || notification.status === 'server_ack' ? (
-                              <StatusBadge status="active" label="✓ Sent" size="sm" />
+                            ) : notification.status === 'server_ack' ? (
+                              <StatusBadge status="active" label="Server acknowledged" size="sm" />
+                            ) : notification.status === 'sent' ? (
+                              <StatusBadge status="active" label="Accepted by Baileys" size="sm" />
                             ) : notification.status === 'processing' ? (
                               <StatusBadge status="in_progress" label="Processing" size="sm" />
                             ) : notification.status === 'failed' ? (

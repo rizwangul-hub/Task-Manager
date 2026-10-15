@@ -30,6 +30,11 @@ router.post(
   authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
   taskController.retryWhatsAppNotification
 );
+router.post(
+  '/:id/retry-whatsapp',
+  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
+  taskController.retryWhatsAppNotification
+);
 
 // Update task details
 router.put('/:id', taskController.updateTask);

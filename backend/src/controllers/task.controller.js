@@ -7,6 +7,7 @@ import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { notificationService } from '../services/notification.service.js';
 import { socketService } from '../services/socket.service.js';
 import { taskAssignmentNotificationService } from '../services/taskAssignmentNotification.service.js';
+import { sendWhatsAppTaskNotification } from '../services/whatsappService.js';
 import { buildCsvString } from '../utils/csv.js';
 import { AppError } from '../middleware/errorHandler.js';
 
@@ -239,20 +240,100 @@ export const taskController = {
   },
 
   retryWhatsAppNotification: async (req, res, next) => {
-    if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(req.params.notificationId)) {
-      return next(new AppError('Invalid task or notification ID.', 400));
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return next(new AppError('Invalid task ID.', 400));
     }
     try {
-      const task = await Task.findById(req.params.id);
+      const task = await Task.findById(req.params.id)
+        .populate('project', 'name projectKey')
+        .populate('assignees', 'name email role phone whatsappNumber')
+        .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
+
       if (!task) return next(new AppError('Task not found.', 404));
-      const notification = await taskAssignmentNotificationService.retry(task._id, req.params.notificationId);
-      if (!notification) {
-        return next(new AppError('A failed notification was not found for this task.', 404));
+
+      // Resolve recipient phone number
+      let recipient = null;
+      let recipientName = 'Team Member';
+
+      if (task.assignedContact?.whatsappNumber) {
+        recipient = task.assignedContact.whatsappNumber;
+        recipientName = task.assignedContact.fullName || 'Team Member';
+      } else if (task.assignees?.length > 0) {
+        const assignedUser = task.assignees.find((u) => u.whatsappNumber || u.phone) || task.assignees[0];
+        recipient = assignedUser.whatsappNumber || assignedUser.phone;
+        recipientName = assignedUser.name || 'Team Member';
       }
-      res.status(202).json({
-        status: 'success',
-        message: 'WhatsApp notification retry queued.',
-        data: { notification: notification.toJSON() }
+
+      if (!recipient) {
+        task.whatsappNotificationStatus = 'failed';
+        task.whatsappNotificationError = 'No WhatsApp phone number configured on assigned contact or user.';
+        await task.save();
+        return res.status(400).json({
+          status: 'fail',
+          message: task.whatsappNotificationError,
+          data: { task: task.toJSON() }
+        });
+      }
+
+      const messageText = [
+        `Hello ${recipientName},`,
+        '',
+        'You have been assigned a task.',
+        '',
+        `Task: ${task.title}`,
+        `Project: ${task.project?.name || 'Project'}`,
+        `Priority: ${task.priority}`,
+        `Due Date: ${task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric'
+        }) : 'No deadline'}`,
+        task.description ? `\nDescription: ${task.description}` : '',
+        '',
+        'Please review the task details and contact the task manager if you have any questions.',
+        '',
+        'Thank you.'
+      ].filter(Boolean).join('\n');
+
+      const result = await sendWhatsAppTaskNotification(recipient, messageText, {
+        taskTitle: task.title
+      });
+
+      if (result.success) {
+        task.whatsappNotificationStatus = 'sent';
+        task.whatsappNotificationSent = true;
+        task.whatsappNotificationError = null;
+        await task.save();
+      } else {
+        task.whatsappNotificationStatus = 'failed';
+        task.whatsappNotificationSent = false;
+        task.whatsappNotificationError = result.error || result.reason;
+        await task.save();
+      }
+
+      // If notificationId is provided, also update TaskWhatsAppNotification
+      if (req.params.notificationId && mongoose.isValidObjectId(req.params.notificationId)) {
+        try {
+          const { TaskWhatsAppNotification, TASK_WHATSAPP_STATUSES } = await import(
+            '../models/taskWhatsAppNotification.model.js'
+          );
+          await TaskWhatsAppNotification.findByIdAndUpdate(req.params.notificationId, {
+            status: result.success ? TASK_WHATSAPP_STATUSES.SENT : TASK_WHATSAPP_STATUSES.FAILED,
+            failureReason: result.success ? null : (result.error || result.reason),
+            sentAt: result.success ? new Date() : null,
+            providerMessageId: result.messageId || null
+          });
+        } catch {
+          // Best effort sync
+        }
+      }
+
+      res.status(result.success ? 200 : 400).json({
+        status: result.success ? 'success' : 'fail',
+        message: result.success
+          ? 'WhatsApp notification sent successfully.'
+          : (result.error || result.reason || 'Failed to dispatch WhatsApp notification.'),
+        data: { task: task.toJSON(), result }
       });
     } catch (error) {
       next(error);

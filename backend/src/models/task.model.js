@@ -145,6 +145,15 @@ const taskSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    whatsappNotificationStatus: {
+      type: String,
+      enum: ['pending', 'processing', 'sent', 'delivered', 'failed', null],
+      default: null
+    },
+    whatsappNotificationError: {
+      type: String,
+      default: null
+    },
     customFields: [
       {
         key: { type: String, required: true, trim: true },

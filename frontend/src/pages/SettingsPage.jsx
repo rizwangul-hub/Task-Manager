@@ -90,9 +90,12 @@ export const SettingsPage = () => {
   }, []);
 
   useEffect(() => {
-    fetchWhatsAppDiagnostics();
+    const initialFetch = setTimeout(fetchWhatsAppDiagnostics, 0);
     const timer = setInterval(fetchWhatsAppDiagnostics, 10_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(initialFetch);
+      clearInterval(timer);
+    };
   }, [fetchWhatsAppDiagnostics]);
 
   const handleGeneralSave = (e) => {
@@ -234,17 +237,19 @@ export const SettingsPage = () => {
             <div className="diagnostic-row">
               <div className="diagnostic-label-col">
                 <span className="diagnostic-title">Sending Capability</span>
-                <span className="diagnostic-desc">
-                  {whatsappDiagnostics?.authenticatedUser
-                    ? `Connected as ${whatsappDiagnostics.authenticatedUser}`
-                    : 'Paired session authorization status'}
-                </span>
+                <span className="diagnostic-desc">Paired Baileys session authorization status</span>
               </div>
               <StatusBadge
-                status={whatsappDiagnostics?.sendingCapabilityStatus === 'ready' || whatsappDiagnostics?.authenticatedUser ? 'healthy' : 'offline'}
-                label={whatsappDiagnostics?.sendingCapabilityStatus === 'ready' ? 'READY' : 'UNAVAILABLE'}
+                status={whatsappDiagnostics?.authenticationValid ? 'healthy' : 'offline'}
+                label={whatsappDiagnostics?.authenticationValid ? 'VALID' : 'NOT READY'}
               />
             </div>
+            <p className="text-sm text-muted">
+              <strong>Last connection:</strong>{' '}
+              {whatsappDiagnostics?.lastConnectionAt
+                ? new Date(whatsappDiagnostics.lastConnectionAt).toLocaleString()
+                : 'No connection established since this server started'}
+            </p>
             <p className="text-sm text-muted">
               <strong>Last successful send:</strong>{' '}
               {whatsappDiagnostics?.lastSuccessfulSendAt
