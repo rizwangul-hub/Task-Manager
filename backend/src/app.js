@@ -8,10 +8,21 @@ import { env } from './config/env.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import { notFoundHandler } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { connectDB } from './config/db.js';
 import apiRouter from './routes/index.js';
 
 const app = express();
 const sanitizeMongoInput = mongoSanitize();
+
+// Ensure MongoDB is connected on incoming requests (essential for serverless runtimes like Vercel)
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+  } catch {
+    // connectDB already logs error internally
+  }
+  next();
+});
 app.set('trust proxy', env.NODE_ENV === 'production' ? 1 : false);
 
 // Security HTTP headers
