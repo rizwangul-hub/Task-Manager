@@ -4,6 +4,8 @@ import { User, USER_ROLES } from '../models/user.model.js';
 import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { notificationService } from '../services/notification.service.js';
 import { socketService } from '../services/socket.service.js';
+import { sendWhatsAppMessage } from '../services/whatsappService.js';
+import { env } from '../config/env.js';
 import { buildCsvString } from '../utils/csv.js';
 import { AppError } from '../middleware/errorHandler.js';
 
@@ -271,7 +273,7 @@ export const taskController = {
       const populated = await Task.findById(task._id)
         .populate('project', 'name projectKey manager')
         .populate('creator', 'name email')
-        .populate('assignees', 'name email role');
+        .populate('assignees', 'name email role phone');
 
       // Dispatch notifications to assignees
       if (populated.assignees && populated.assignees.length > 0) {
@@ -280,6 +282,46 @@ export const taskController = {
           req.user,
           populated.assignees.map((a) => a._id || a)
         );
+      }
+
+      const dueDateText = populated.dueDate
+        ? new Date(populated.dueDate).toLocaleDateString()
+        : 'Not set';
+      const whatsAppTaskMessage = [
+        '📌 *New Task Created*',
+        `*Task:* ${populated.title}`,
+        `*Key:* ${populated.taskKey}`,
+        `*Board:* ${populated.project?.name || 'Project'}`,
+        `*Priority:* ${populated.priority}`,
+        `*Due Date:* ${dueDateText}`,
+        `*Created By:* ${req.user?.name || 'User'}`,
+        `*Assigned To:* ${populated.assignees?.map((a) => a.name || a.email).join(', ') || 'Unassigned'}`
+      ].join('\n');
+
+      const targetJid =
+        req.body.whatsappTarget ||
+        req.body.targetJid ||
+        env.WHATSAPP.taskNotificationJid ||
+        process.env.WHATSAPP_NOTIFICATION_TARGET ||
+        process.env.WHATSAPP_OUTBOUND_JID ||
+        (process.env.PIXX_WHATSAPP_GROUP_ID && process.env.PIXX_WHATSAPP_GROUP_ID !== 'all' ? process.env.PIXX_WHATSAPP_GROUP_ID : null) ||
+        (process.env.WHATSAPP_GROUP_ID && process.env.WHATSAPP_GROUP_ID !== 'all' ? process.env.WHATSAPP_GROUP_ID : null);
+
+      if (targetJid) {
+        void sendWhatsAppMessage(targetJid, whatsAppTaskMessage);
+      }
+
+      // Also dispatch to assignees with registered phone numbers
+      if (Array.isArray(populated.assignees)) {
+        for (const assignee of populated.assignees) {
+          if (assignee?.phone && assignee.phone.trim()) {
+            const cleanPhone = assignee.phone.trim();
+            if (targetJid && (cleanPhone === targetJid || targetJid.includes(cleanPhone.replace(/[^0-9]/g, '')))) {
+              continue;
+            }
+            void sendWhatsAppMessage(cleanPhone, whatsAppTaskMessage);
+          }
+        }
       }
 
       res.status(201).json({

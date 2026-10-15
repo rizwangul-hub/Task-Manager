@@ -114,6 +114,14 @@ const taskSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    deadlineAlertSent: {
+      type: Boolean,
+      default: false
+    },
+    overdueAlertSent: {
+      type: Boolean,
+      default: false
+    },
     customFields: [
       {
         key: { type: String, required: true, trim: true },

@@ -468,6 +468,39 @@ export const closeWhatsAppListener = async () => {
   }
 };
 
+/**
+ * Send an outbound message to a specific WhatsApp JID (user or group)
+ * @param {string} targetJid - e.g. "447123456789@s.whatsapp.net" or "120363049482690322@g.us"
+ * @param {string} messageText - formatted notification message
+ */
+export async function sendWhatsAppMessage(targetJid, messageText) {
+  if (!sock) {
+    console.warn('[WA_OUTBOUND] Cannot send message: Baileys socket is not connected.');
+    return false;
+  }
+
+  if (!targetJid || typeof targetJid !== 'string' || !targetJid.trim()) {
+    console.warn('[WA_OUTBOUND] Cannot send message: WhatsApp recipient is not configured.');
+    return false;
+  }
+
+  try {
+    // Format individual phone numbers if only raw digits were passed
+    let formattedJid = targetJid.trim();
+    if (!formattedJid.includes('@')) {
+      const cleanDigits = formattedJid.replace(/[^0-9]/g, '');
+      formattedJid = `${cleanDigits}@s.whatsapp.net`;
+    }
+
+    await sock.sendMessage(formattedJid, { text: messageText });
+    console.log(`✅ [WA_OUTBOUND] Notification successfully sent to: ${formattedJid}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ [WA_OUTBOUND_ERROR] Failed to send to ${targetJid}:`, error.message);
+    return false;
+  }
+}
+
 // ─── Internals exposed for unit tests ────────────────────────────────────────
 export const whatsappListenerInternals = {
   getGroupTitle,

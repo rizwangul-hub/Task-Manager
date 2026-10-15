@@ -141,6 +141,7 @@ export const env = {
     verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
     appSecret: process.env.WHATSAPP_APP_SECRET || '',
     groupId: process.env.PIXX_WHATSAPP_GROUP_ID || process.env.WHATSAPP_GROUP_ID || '',
+    taskNotificationJid: process.env.WHATSAPP_TASK_NOTIFICATION_JID || '',
     authInfoPath: process.env.AUTH_INFO_PATH || './auth_info_baileys',
     accessToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_API_TOKEN || '',
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',

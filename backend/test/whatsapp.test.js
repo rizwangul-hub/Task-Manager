@@ -11,7 +11,7 @@ import {
 } from '../src/utils/metaWhatsApp.js';
 import { whatsappParserService } from '../src/services/whatsappParser.service.js';
 import { whatsappPayloadAdapterService } from '../src/services/whatsappPayloadAdapter.service.js';
-import { whatsappListenerInternals } from '../src/services/whatsappService.js';
+import { whatsappListenerInternals, sendWhatsAppMessage } from '../src/services/whatsappService.js';
 import { uploadBufferToCloudinary } from '../src/services/cloudinaryUploadService.js';
 
 test('WhatsApp task schema defaults and source enum', async () => {
@@ -27,6 +27,8 @@ test('WhatsApp task schema defaults and source enum', async () => {
   assert.equal(task.status, 'Working on it');
   assert.equal(task.groupTitle, 'General Tasks');
   assert.equal(task.reminderSent, false);
+  assert.equal(task.deadlineAlertSent, false);
+  assert.equal(task.overdueAlertSent, false);
   assert.equal(task.priority, 'Medium');
 
   task.source = TASK_SOURCES.WHATSAPP;
@@ -298,3 +300,12 @@ test('Task assignment email includes board, group, priority, and due date safely
   assert.match(template.html, /10\/15\/2026/);
   assert.doesNotMatch(template.html, /<img src=x>/);
 });
+
+test('sendWhatsAppMessage handles disconnected Baileys socket and empty recipient safely', async () => {
+  const resultDisconnected = await sendWhatsAppMessage('447123456789', 'Hello from web dashboard');
+  assert.equal(resultDisconnected, false);
+
+  const resultEmpty = await sendWhatsAppMessage('', 'Hello');
+  assert.equal(resultEmpty, false);
+});
+

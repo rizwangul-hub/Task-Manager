@@ -15,7 +15,6 @@ import { socketService } from './socket.service.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { TASK_STATUSES } from '../models/task.model.js';
-import { USER_ROLES } from '../models/user.model.js';
 
 /**
  * Check if recipient's preferences allow this notification type
@@ -282,84 +281,6 @@ export const notificationService = {
         htmlContent: emailTemplate.html
       }).catch((error) => {
         logger.error(`[EMAIL_FAILED] Task notification fallback email failed: ${error.message}`);
-      });
-    }
-  },
-
-  notifyWhatsAppTaskCreated: async (task, senderPhone, { senderName = '', groupName = '' } = {}) => {
-    if (!task) return;
-    const actionUrl = `${env.FRONTEND_URL}/tasks`;
-    const projectName = task.project?.name || 'Project';
-    const recipients = new Set([
-      ...(task.assignees || []).map((assignee) => (assignee._id || assignee).toString()),
-      task.project?.manager
-        ? (task.project.manager._id || task.project.manager).toString()
-        : null
-    ].filter(Boolean));
-    const managers = await User.find({
-      isActive: true,
-      role: { $in: [USER_ROLES.ADMIN, USER_ROLES.MANAGER, 'ADMIN', 'MANAGER'] }
-    }).select('_id');
-    managers.forEach((manager) => recipients.add(manager._id.toString()));
-    const previewImage = task.previewImage?.url || task.attachments?.find((file) =>
-      file.fileType?.startsWith('image/')
-    )?.url;
-
-    if (!recipients.size && env.EMAIL.emailUser) {
-      const emailTemplate = emailService.templates.whatsappTaskCreated({
-        taskTitle: task.title,
-        taskKey: task.taskKey,
-        projectName,
-        senderPhone,
-        senderName,
-        groupName,
-        priority: task.priority,
-        dueDate: task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'None',
-        taskPreviewUrl: previewImage,
-        actionUrl
-      });
-      void sendTaskNotificationEmail({
-        to: env.EMAIL.emailUser,
-        subject: emailTemplate.subject,
-        htmlContent: emailTemplate.html
-      }).catch((error) => {
-        logger.error(`[EMAIL_FAILED] WhatsApp task fallback email failed: ${error.message}`);
-      });
-      return;
-    }
-
-    for (const recipientId of recipients) {
-      const emailTemplate = emailService.templates.whatsappTaskCreated({
-        taskTitle: task.title,
-        taskKey: task.taskKey,
-        projectName,
-        senderPhone,
-        senderName,
-        groupName,
-        priority: task.priority,
-        dueDate: task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'None',
-        taskPreviewUrl: previewImage,
-        actionUrl
-      });
-      await notificationService.dispatch({
-        recipientId,
-        type: NOTIFICATION_TYPES.WHATSAPP_TASK_CREATED,
-        title: `WhatsApp task received: ${task.taskKey}`,
-        message: `A task was created from a WhatsApp message from ${senderName ? `${senderName} (${senderPhone})` : senderPhone}.`,
-        taskId: task._id,
-        projectId: task.project?._id || task.project,
-        dedupKey: `whatsapp-task-${task.whatsappMessageId}-${recipientId}`,
-        metadata: { senderPhone, senderName, groupName, source: 'WhatsApp' },
-        emailTemplate
-      });
-      socketService.emitUserEvent(recipientId, 'new_task_from_whatsapp', {
-        taskId: task._id,
-        taskKey: task.taskKey,
-        title: task.title,
-        project: { _id: task.project?._id, name: projectName },
-        groupName,
-        source: 'WhatsApp',
-        previewImage
       });
     }
   },

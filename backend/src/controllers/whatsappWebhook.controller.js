@@ -6,7 +6,6 @@ import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { Comment } from '../models/comment.model.js';
 import { User } from '../models/user.model.js';
 import { WhatsAppWebhookJob, WHATSAPP_JOB_STATUSES } from '../models/whatsappWebhookJob.model.js';
-import { notificationService } from '../services/notification.service.js';
 import { socketService } from '../services/socket.service.js';
 import { whatsappMediaService } from '../services/whatsappMedia.service.js';
 import { whatsappParserService } from '../services/whatsappParser.service.js';
@@ -296,10 +295,6 @@ const createTaskFromMessage = async (
     logger.warn(`[SOCKET_EMIT] Unable to emit task:created for task "${populatedTask.title}": Socket.IO is not initialized.`);
   }
 
-  await notificationService.notifyWhatsAppTaskCreated(populatedTask, message.senderPhone, {
-    senderName: message.senderName,
-    groupName: groupTitle || parsed.groupTitle || parsed.groupName
-  });
   return true;
 };
 

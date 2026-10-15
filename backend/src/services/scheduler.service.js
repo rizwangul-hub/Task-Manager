@@ -11,6 +11,89 @@ import { processWhatsAppQueue } from '../controllers/whatsappWebhook.controller.
 let cronTask = null;
 let whatsappQueueTimer = null;
 
+export async function checkDeadlinesAndOverdue() {
+  const now = new Date();
+  const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const adminEmail = process.env.INITIAL_ADMIN_EMAIL || env.EMAIL.emailUser;
+  let sentCount = 0;
+
+  for (const [alertType, query, isOverdue] of [
+    [
+      'deadlineAlertSent',
+      {
+        dueDate: { $gte: now, $lte: next24Hours },
+        deadlineAlertSent: { $ne: true }
+      },
+      false
+    ],
+    [
+      'overdueAlertSent',
+      {
+        dueDate: { $lt: now },
+        overdueAlertSent: { $ne: true }
+      },
+      true
+    ]
+  ]) {
+    const tasks = await Task.find({
+      ...query,
+      isArchived: false,
+      status: { $nin: [TASK_STATUSES.DONE, 'Completed'] }
+    })
+      .populate('assignees', 'name email')
+      .populate('project', 'name')
+      .limit(500);
+
+    for (const task of tasks) {
+      const recipients = [...new Set(
+        (task.assignees || []).map((assignee) => assignee.email?.trim()).filter(Boolean)
+      )];
+      if (!recipients.length && adminEmail) recipients.push(adminEmail.trim());
+      if (!recipients.length) {
+        logger.warn(`[SCHEDULER] No email recipient available for ${alertType} task ${task.taskKey}.`);
+        continue;
+      }
+
+      const emailTemplate = emailService.templates.dueReminder({
+        taskTitle: task.title,
+        taskKey: task.taskKey,
+        projectName: task.project?.name || 'Project',
+        dueDate: new Date(task.dueDate).toLocaleDateString(),
+        isOverdue,
+        actionUrl: `${env.FRONTEND_URL}/tasks`
+      });
+      let allEmailsSent = true;
+
+      for (const recipient of recipients) {
+        try {
+          const result = await emailService.sendEmail({
+            to: recipient,
+            subject: emailTemplate.subject,
+            html: emailTemplate.html,
+            text: emailTemplate.text
+          });
+          if (result.success) {
+            sentCount++;
+          } else {
+            allEmailsSent = false;
+            logger.warn(`[SCHEDULER] ${alertType} email was not sent for task ${task.taskKey}: ${result.reason || 'unknown reason'}.`);
+          }
+        } catch (error) {
+          allEmailsSent = false;
+          logger.error(`[SCHEDULER] ${alertType} email failed for task ${task.taskKey} to ${recipient}: ${error.message}`);
+        }
+      }
+
+      if (allEmailsSent) {
+        task[alertType] = true;
+        await task.save();
+      }
+    }
+  }
+
+  return { sentCount };
+}
+
 export const schedulerService = {
   /**
    * Run one pass of upcoming due date reminders and overdue alerts
@@ -24,6 +107,8 @@ export const schedulerService = {
     let processedCount = 0;
 
     try {
+      const emailAlerts = await checkDeadlinesAndOverdue();
+
       // 1. Process Overdue Tasks: dueDate < now, status != Done, isArchived != true
       const overdueTasks = await Task.find({
         isArchived: false,
@@ -57,7 +142,8 @@ export const schedulerService = {
             taskId: task._id,
             projectId: task.project?._id || task.project,
             dedupKey,
-            emailTemplate
+            emailTemplate,
+            channel: 'IN_APP'
           });
           processedCount++;
         }
@@ -98,7 +184,7 @@ export const schedulerService = {
             projectId: task.project?._id || task.project,
             dedupKey,
             emailTemplate,
-            channel: 'BOTH'
+            channel: 'IN_APP'
           });
           processedCount++;
         }
@@ -109,8 +195,8 @@ export const schedulerService = {
         );
       }
 
-      logger.info(`[SCHEDULER] Deadline check completed. Dispatched ${processedCount} alerts.`);
-      return { success: true, processedCount };
+      logger.info(`[SCHEDULER] Deadline check completed. Dispatched ${processedCount} in-app alerts and sent ${emailAlerts.sentCount} email alert(s).`);
+      return { success: true, processedCount, emailAlertsSent: emailAlerts.sentCount };
     } catch (error) {
       logger.error('[SCHEDULER_ERROR] Failed during due reminders check:', error);
       return { success: false, error: error.message };
@@ -125,6 +211,24 @@ export const schedulerService = {
 
     try {
       const now = new Date();
+      const suppressedWhatsAppJobs = await NotificationOutbox.updateMany(
+        {
+          notificationType: NOTIFICATION_TYPES.WHATSAPP_TASK_CREATED,
+          channel: 'email',
+          status: { $in: [OUTBOX_STATUSES.PENDING, OUTBOX_STATUSES.FAILED] }
+        },
+        {
+          $set: {
+            status: OUTBOX_STATUSES.FAILED,
+            attempts: 3,
+            lastError: 'WhatsApp task-creation email notifications are disabled.'
+          }
+        }
+      );
+      if (suppressedWhatsAppJobs.modifiedCount) {
+        logger.info(`[SCHEDULER] Suppressed ${suppressedWhatsAppJobs.modifiedCount} queued WhatsApp task-creation email(s).`);
+      }
+
       const failedJobs = await NotificationOutbox.find({
         status: { $in: [OUTBOX_STATUSES.PENDING, OUTBOX_STATUSES.FAILED] },
         channel: 'email',
