@@ -215,6 +215,8 @@ export const AllTasksPage = () => {
 
   useEffect(() => {
     const socket = socketService.connect();
+    if (!socket) return;
+
     const handleTaskUpdate = (payload) => {
       const updatedTask = payload?.task;
       const taskId = updatedTask?._id || payload?.taskId;
@@ -225,19 +227,32 @@ export const AllTasksPage = () => {
           : task
       ));
     };
-    const handleTaskCreated = (createdTask) => {
-      const createdProjectId = createdTask?.project?._id || createdTask?.project;
-      if (projectFilter && createdProjectId?.toString() !== projectFilter.toString()) return;
-      if (!createdTask?._id) return;
-      void fetchTasks();
+
+    const handleIncomingTask = (task) => {
+      console.log('📥 [FRONTEND_SOCKET] Incoming task received:', task);
+      if (!task?._id) return;
+
+      const createdProjectId = task.project?._id || task.project;
+      if (projectFilter && createdProjectId && createdProjectId.toString() !== projectFilter.toString()) {
+        return;
+      }
+
+      setTasks((prev) => {
+        if (prev.some((t) => t._id === task._id)) return prev;
+        return [task, ...prev];
+      });
     };
+
     socket.on('task:updated', handleTaskUpdate);
-    socket.on('task:created', handleTaskCreated);
+    socket.on('task:created', handleIncomingTask);
+    socket.on('task:new', handleIncomingTask);
+
     return () => {
       socket.off('task:updated', handleTaskUpdate);
-      socket.off('task:created', handleTaskCreated);
+      socket.off('task:created', handleIncomingTask);
+      socket.off('task:new', handleIncomingTask);
     };
-  }, [fetchTasks, projectFilter]);
+  }, [projectFilter]);
 
   // Clear all filters
   const handleClearFilters = () => {

@@ -56,14 +56,43 @@ const isAuthorized = (req, payload, provider) => {
 };
 
 const getTargetProject = async (boardName) => {
-  const target = await Project.findOne({
-    name: new RegExp(`^${escapeRegex(boardName)}$`, 'i'),
+  // 1. Try finding an unarchived project matching the parsed board name
+  if (boardName) {
+    const target = await Project.findOne({
+      name: new RegExp(`^${escapeRegex(boardName)}$`, 'i'),
+      isArchived: false
+    });
+    if (target) return target;
+  }
+
+  // 2. Try configured default project ID if valid
+  if (mongoose.Types.ObjectId.isValid(env.WHATSAPP.defaultProjectId)) {
+    const defaultProject = await Project.findOne({ _id: env.WHATSAPP.defaultProjectId, isArchived: false });
+    if (defaultProject) return defaultProject;
+  }
+
+  // 3. Fallback: Query MongoDB for the first active default project
+  const firstActiveProject = await Project.findOne({ isArchived: false }).sort({ createdAt: 1 });
+  if (firstActiveProject) return firstActiveProject;
+
+  // 4. Any project in the database
+  const anyProject = await Project.findOne().sort({ createdAt: 1 });
+  if (anyProject) return anyProject;
+
+  // 5. If no project exists, create a default project automatically
+  let adminUser = await User.findOne({ isActive: true, role: { $in: ['ADMIN', 'MANAGER'] } });
+  if (!adminUser) adminUser = await User.findOne({ isActive: true });
+  if (!adminUser) return null;
+
+  return Project.create({
+    name: 'General Tasks',
+    projectKey: 'GEN',
+    description: 'Default project for incoming WhatsApp tasks',
+    manager: adminUser._id,
+    members: [adminUser._id],
+    createdBy: adminUser._id,
     isArchived: false
   });
-  if (target) return target;
-
-  if (!mongoose.Types.ObjectId.isValid(env.WHATSAPP.defaultProjectId)) return null;
-  return Project.findOne({ _id: env.WHATSAPP.defaultProjectId, isArchived: false });
 };
 
 const getTaskAssignees = async (text, project) => {
@@ -107,25 +136,33 @@ const createTaskFromMessage = async (
   }
 
   const groupId = String(message.groupId || '');
-  if (groupId !== env.WHATSAPP.groupId) return false;
+  const targetGroupConfig = (process.env.PIXX_WHATSAPP_GROUP_ID || env.WHATSAPP.groupId || '').trim();
+  const isAllowAll = !targetGroupConfig || targetGroupConfig.toLowerCase() === 'all';
+  if (!isAllowAll && groupId && targetGroupConfig !== groupId) {
+    const allowed = targetGroupConfig.split(',').map((g) => g.trim()).filter(Boolean);
+    if (!allowed.includes(groupId)) return false;
+  }
 
   const messageText = String(message.text || '').trim();
-  const displayText = messageText || `WhatsApp media from ${message.senderName || message.senderPhone}`;
+  const displayText = messageText || `WhatsApp media from ${message.senderName || message.senderPhone || 'Member'}`;
   const parsed = whatsappParserService.parseMessage(messageText);
   const existing = await Task.findOne({ whatsappMessageId: message.id }).select('_id');
   if (existing) return false;
 
   const project = await getTargetProject(parsed.boardName);
   if (!project) {
-    throw new Error(`No active board found for "${parsed.boardName}", and the configured fallback project is unavailable.`);
+    throw new Error('No active project found and unable to initialize default project.');
   }
 
-  const assignees = await getTaskAssignees(messageText, project);
-  if (!assignees.length) throw new Error(`Board "${project.name}" has no active manager or assigned team member.`);
+  let assignees = await getTaskAssignees(messageText, project);
+  if (!assignees.length) {
+    assignees = project.manager ? [project.manager] : [];
+  }
 
   let creator = await User.findOne({ email: env.OWNER.email, isActive: true });
-  if (!creator) creator = await User.findOne({ _id: project.manager, isActive: true });
-  if (!creator) throw new Error('An active task creator is required for WhatsApp intake.');
+  if (!creator && project.manager) creator = await User.findOne({ _id: project.manager, isActive: true });
+  if (!creator) creator = await User.findOne({ isActive: true });
+  if (!creator) throw new Error('An active user account is required for WhatsApp intake.');
 
   let attachments = [];
   let mediaError = '';
@@ -145,17 +182,24 @@ const createTaskFromMessage = async (
     mediaError ? `Attachment upload warning: ${mediaError}` : ''
   ].filter(Boolean);
 
+  const finalTitle =
+    title ||
+    parsed.title ||
+    fallbackTitle ||
+    (messageText ? messageText.slice(0, 80) : '') ||
+    `WhatsApp Media from ${message.senderName || message.senderPhone || 'Member'} - ${new Date().toLocaleTimeString()}`;
+
   let task;
   try {
     task = await Task.create({
       _id: id,
-      title: title || parsed.title || fallbackTitle || displayText.slice(0, 80),
+      title: finalTitle,
       description: descriptionParts.join('\n\n').slice(0, 5000),
       project: project._id,
-      taskKey: `${project.projectKey}-WA-${id.toString().slice(-8)}`,
+      taskKey: `${project.projectKey || 'TASK'}-WA-${id.toString().slice(-8)}`,
       creator: creator._id,
       assignees,
-      status: TASK_STATUSES.WORKING_ON_IT,
+      status: TASK_STATUSES.TO_DO,
       source: TASK_SOURCES.WHATSAPP,
       whatsappMessageId: message.id,
       whatsappSender: {
@@ -223,7 +267,7 @@ const createTaskFromMessage = async (
   });
 
   const populatedTask = await Task.findById(task._id)
-    .populate('project', 'name projectKey status manager members')
+    .populate('project', 'name title projectKey status manager members')
     .populate('assignees', 'name email avatar role')
     .populate('creator', 'name email avatar');
 
@@ -235,15 +279,21 @@ const createTaskFromMessage = async (
     ...(populatedTask.project?.members || []).map(getReferenceId)
   ].filter(Boolean));
   const taskPayload = populatedTask.toJSON();
-  if (!socketService.getIO()) {
-    logger.warn(`[SOCKET_EMIT] Unable to emit task:created for task "${populatedTask.title}": Socket.IO is not initialized.`);
+  if (taskPayload.project && !taskPayload.project.title) {
+    taskPayload.project.title = taskPayload.project.name;
+  }
+  if (!taskPayload.assignee && taskPayload.assignees?.length) {
+    taskPayload.assignee = taskPayload.assignees[0];
+  }
+
+  const io = socketService.getIO();
+  if (io) {
+    // Broadcast globally so all active boards receive it regardless of room
+    io.emit('task:created', taskPayload);
+    io.emit('task:new', taskPayload);
+    console.log('📢 [SOCKET_EMIT] Broadcasted task to frontend:', populatedTask.title);
   } else {
-    authorizedUserIds.forEach((userId) => {
-      socketService.emitUserEvent(userId, 'task:created', taskPayload);
-    });
-    logger.info(
-      `[SOCKET_EMIT] Sent task:created for task "${populatedTask.title}" to ${authorizedUserIds.size} authorized project user(s).`
-    );
+    logger.warn(`[SOCKET_EMIT] Unable to emit task:created for task "${populatedTask.title}": Socket.IO is not initialized.`);
   }
 
   await notificationService.notifyWhatsAppTaskCreated(populatedTask, message.senderPhone, {

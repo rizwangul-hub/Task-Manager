@@ -9,6 +9,7 @@ import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import StatusBadge from '../components/ui/StatusBadge';
 import { taskService } from '../services/taskService';
+import { socketService } from '../services/socket';
 import { useAuth } from '../hooks/useAuth';
 import {
   ListTodo,
@@ -53,6 +54,19 @@ export const DashboardPage = () => {
 
   useEffect(() => {
     fetchStats();
+
+    const socket = socketService.connect();
+    if (!socket) return;
+
+    socket.on('task:created', fetchStats);
+    socket.on('task:new', fetchStats);
+    socket.on('task:updated', fetchStats);
+
+    return () => {
+      socket.off('task:created', fetchStats);
+      socket.off('task:new', fetchStats);
+      socket.off('task:updated', fetchStats);
+    };
   }, [fetchStats]);
 
   const metrics = stats?.metrics || {

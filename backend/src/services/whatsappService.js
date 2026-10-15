@@ -198,42 +198,65 @@ const handleMessage = async (activeSock, message) => {
     const content = getMessageContent(message.message);
     if (!content) return;
 
-    const text = extractMessageText(message);
-    const mediaMessage = content.imageMessage;
-    const media = [];
-
-    if (mediaMessage) {
-      const imageBuffer = await downloadImage(message, activeSock);
-      media.push({
-        id: messageId,
-        base64: imageBuffer.toString('base64'),
-        mimeType: mediaMessage.mimetype || 'image/jpeg',
-        fileName: getMediaFileName(messageId, mediaMessage.mimetype)
-      });
-    }
-
+    const rawText = extractMessageText(message);
+    const senderName = message.pushName || '';
     const senderPhone = String(message.key.participant || '')
       .replace(/:\d+@/, '@')
       .replace(/@s\.whatsapp\.net$/, '');
+
+    // 1. Text & Media Fallbacks: If text is empty or '[Media/No Text]', set a sensible default title
+    const hasMeaningfulText = rawText &&
+      rawText !== '[Media/No Text]' &&
+      rawText !== '[Media/Image]' &&
+      rawText !== '[Media]';
+
+    const cleanText = hasMeaningfulText ? rawText : '';
+    const finalTitle = cleanText
+      ? cleanText.split(/\r?\n/, 1)[0]?.slice(0, 80).trim()
+      : `WhatsApp Media from ${senderName || senderPhone || 'Member'} - ${new Date().toLocaleTimeString()}`;
+
+    const mediaMessage = content.imageMessage || content.documentMessage || content.videoMessage;
+    const media = [];
+
+    if (mediaMessage) {
+      try {
+        const imageBuffer = await downloadImage(message, activeSock);
+        media.push({
+          id: messageId,
+          base64: imageBuffer.toString('base64'),
+          mimeType: mediaMessage.mimetype || 'image/jpeg',
+          fileName: mediaMessage.fileName || getMediaFileName(messageId, mediaMessage.mimetype)
+        });
+      } catch (err) {
+        logger.error(`[WA] Failed to download media attachment for ${messageId}:`, err);
+      }
+    }
+
     const timestamp = message.messageTimestamp
       ? new Date(Number(message.messageTimestamp) * 1000)
       : new Date();
+
+    console.log('[WA_INTAKE] Passing message to task parser...', {
+      id: messageId,
+      finalTitle,
+      hasMedia: media.length > 0
+    });
 
     await ingestWhatsAppMessage(
       {
         id: messageId,
         groupId: remoteJid,
         senderPhone,
-        senderName: message.pushName || '',
+        senderName,
         timestamp,
-        text,
+        text: cleanText,
         media
       },
       'baileys',
       {
-        groupTitle: getGroupTitle(text),
-        title: text.split(/\r?\n/, 1)[0]?.slice(0, 80).trim() || '',
-        fallbackTitle: `WhatsApp Image Task - ${Date.now()}`
+        groupTitle: getGroupTitle(cleanText || finalTitle),
+        title: finalTitle,
+        fallbackTitle: finalTitle
       }
     );
   } finally {
