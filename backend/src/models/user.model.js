@@ -55,6 +55,12 @@ const userSchema = new mongoose.Schema(
       trim: true,
       maxlength: [32, 'Phone number cannot exceed 32 characters']
     },
+    whatsappNumber: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: [32, 'WhatsApp number cannot exceed 32 characters']
+    },
     role: {
       type: String,
       enum: {

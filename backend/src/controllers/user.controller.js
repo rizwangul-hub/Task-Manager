@@ -92,7 +92,7 @@ export const userController = {
    */
   createUser: async (req, res, next) => {
     const body = req.body || {};
-    const { name, email, password, phone, avatar } = body;
+    const { name, email, password, phone, whatsappNumber, avatar } = body;
     const requestedRole = body.role || USER_ROLES.MEMBER;
 
     if (typeof name !== 'string' || !name.trim() ||
@@ -101,8 +101,9 @@ export const userController = {
       return next(new AppError('Name, email, and password are required.', 400));
     }
     if ((phone !== undefined && typeof phone !== 'string') ||
+        (whatsappNumber !== undefined && whatsappNumber !== null && typeof whatsappNumber !== 'string') ||
         (avatar !== undefined && typeof avatar !== 'string')) {
-      return next(new AppError('Phone and avatar values must be strings.', 400));
+      return next(new AppError('Phone, WhatsApp number, and avatar values must be strings.', 400));
     }
     if (password.length < 8) {
       return next(new AppError('Password must be at least 8 characters long.', 400));
@@ -126,6 +127,9 @@ export const userController = {
         passwordHash: await User.hashPassword(password),
         role: requestedRole,
         phone: phone || '',
+        whatsappNumber: typeof whatsappNumber === 'string' && whatsappNumber.trim()
+          ? whatsappNumber.trim()
+          : null,
         avatar: avatar || ''
       });
 
@@ -145,7 +149,7 @@ export const userController = {
    */
   updateUser: async (req, res, next) => {
     const { id } = req.params;
-    const { name, email, phone, avatar } = req.body || {};
+    const { name, email, phone, whatsappNumber, avatar } = req.body || {};
 
     try {
       if (req.user._id.toString() !== id) {
@@ -166,6 +170,14 @@ export const userController = {
       if (phone !== undefined) {
         if (typeof phone !== 'string') return next(new AppError('Phone must be a string.', 400));
         user.phone = phone.trim();
+      }
+      if (whatsappNumber !== undefined) {
+        if (whatsappNumber !== null && typeof whatsappNumber !== 'string') {
+          return next(new AppError('WhatsApp number must be a string or null.', 400));
+        }
+        user.whatsappNumber = typeof whatsappNumber === 'string' && whatsappNumber.trim()
+          ? whatsappNumber.trim()
+          : null;
       }
       if (avatar !== undefined) {
         if (typeof avatar !== 'string') return next(new AppError('Avatar must be a string.', 400));

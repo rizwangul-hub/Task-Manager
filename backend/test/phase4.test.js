@@ -77,6 +77,9 @@ test('Phase 4 - User model contains default notificationPreferences', async () =
   assert.strictEqual(user.notificationPreferences.taskDueDate, true);
   assert.strictEqual(user.notificationPreferences.taskComments, true);
   assert.strictEqual(user.notificationPreferences.overdueReminders, true);
+  assert.equal(user.whatsappNumber, null);
+  user.whatsappNumber = ' 923179500901 ';
+  assert.equal(user.whatsappNumber, '923179500901');
 });
 
 test('Phase 4 - Email service handles unconfigured state safely without throwing', async () => {

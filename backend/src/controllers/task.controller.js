@@ -201,7 +201,17 @@ export const taskController = {
    * POST /api/tasks
    */
   createTask: async (req, res, next) => {
-    const { title, description, project: projectId, assignees, status, priority, startDate, dueDate } = req.body;
+    const {
+      title,
+      description,
+      project: projectId,
+      assignee,
+      assignees,
+      status,
+      priority,
+      startDate,
+      dueDate
+    } = req.body;
 
     if (!title || !projectId) {
       return next(new AppError('Task title and project reference are required.', 400));
@@ -215,8 +225,13 @@ export const taskController = {
 
       // Managers may assign any active workspace user; assignment grants board visibility.
       const validatedAssigneeIds = [];
-      if (Array.isArray(assignees) && assignees.length > 0) {
-        for (const uid of assignees) {
+      const requestedAssignees = Array.isArray(assignees)
+        ? assignees
+        : assignee
+          ? [assignee]
+          : [];
+      if (requestedAssignees.length > 0) {
+        for (const uid of requestedAssignees) {
           const user = await User.findById(uid);
           if (user && user.isActive) {
             validatedAssigneeIds.push(user._id);
@@ -226,7 +241,7 @@ export const taskController = {
           }
         }
       }
-      if (validatedAssigneeIds.length === 0) {
+      if (validatedAssigneeIds.length === 0 && !Object.prototype.hasOwnProperty.call(req.body, 'assignee')) {
         validatedAssigneeIds.push(req.user._id);
       }
       await project.save();
@@ -273,7 +288,7 @@ export const taskController = {
       const populated = await Task.findById(task._id)
         .populate('project', 'name projectKey manager')
         .populate('creator', 'name email')
-        .populate('assignees', 'name email role phone');
+        .populate('assignees', 'name email role phone whatsappNumber');
 
       // Dispatch notifications to assignees
       if (populated.assignees && populated.assignees.length > 0) {
@@ -315,21 +330,16 @@ export const taskController = {
           (process.env.WHATSAPP_GROUP_ID && process.env.WHATSAPP_GROUP_ID !== 'all' ? process.env.WHATSAPP_GROUP_ID : null)
         );
 
-      if (targetJid) {
-        void sendWhatsAppTaskNotification(targetJid, whatsAppTaskMessage);
-      }
-
-      // Also dispatch to assignees with registered phone numbers
-      if (!hasWhatsAppPreference && Array.isArray(populated.assignees)) {
-        for (const assignee of populated.assignees) {
-          if (assignee?.phone && assignee.phone.trim()) {
-            const cleanPhone = assignee.phone.trim();
-            if (targetJid && (cleanPhone === targetJid || targetJid.includes(cleanPhone.replace(/[^0-9]/g, '')))) {
-              continue;
-            }
-            void sendWhatsAppTaskNotification(cleanPhone, whatsAppTaskMessage);
-          }
+      const whatsappTargets = new Set();
+      if (targetJid) whatsappTargets.add(targetJid);
+      for (const taskAssignee of populated.assignees || []) {
+        const assigneeWhatsAppNumber = taskAssignee.whatsappNumber || taskAssignee.phone;
+        if (assigneeWhatsAppNumber?.trim()) {
+          whatsappTargets.add(assigneeWhatsAppNumber.trim());
         }
+      }
+      for (const target of whatsappTargets) {
+        void sendWhatsAppTaskNotification(target, whatsAppTaskMessage);
       }
 
       res.status(201).json({

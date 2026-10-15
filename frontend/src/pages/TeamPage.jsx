@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 export const TeamPage = () => {
-  const { user, isAdmin, isManager } = useAuth();
+  const { user, isAdmin, isManager, checkSession } = useAuth();
   const canManageUsers = isAdmin || isManager;
   const { toast } = useToast();
 
@@ -41,6 +41,9 @@ export const TeamPage = () => {
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('');
   const [formRole, setFormRole] = useState('Member');
+  const [formWhatsAppNumber, setFormWhatsAppNumber] = useState('');
+  const [profileWhatsAppNumber, setProfileWhatsAppNumber] = useState(user?.whatsappNumber || '');
+  const [savingProfile, setSavingProfile] = useState(false);
   const [formError, setFormError] = useState('');
 
   const fetchUsers = useCallback(async () => {
@@ -69,6 +72,7 @@ export const TeamPage = () => {
     setFormEmail('');
     setFormPassword('');
     setFormRole('Member');
+    setFormWhatsAppNumber('');
     setFormError('');
   };
 
@@ -97,7 +101,8 @@ export const TeamPage = () => {
         name: formName.trim(),
         email: formEmail.trim(),
         password: formPassword,
-        role: formRole
+        role: formRole,
+        whatsappNumber: formWhatsAppNumber.trim() || null
       });
       toast.success(`User '${formName}' created successfully.`);
       setIsCreateModalOpen(false);
@@ -106,6 +111,22 @@ export const TeamPage = () => {
       setFormError(err.message || 'Failed to create user account.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleSaveProfileWhatsApp = async (e) => {
+    e.preventDefault();
+    setSavingProfile(true);
+    try {
+      await userService.updateUser(user._id, {
+        whatsappNumber: profileWhatsAppNumber.trim() || null
+      });
+      await checkSession();
+      toast.success('Your WhatsApp number has been saved.');
+    } catch (err) {
+      toast.error(err.message || 'Could not save your WhatsApp number.');
+    } finally {
+      setSavingProfile(false);
     }
   };
 
@@ -122,6 +143,28 @@ export const TeamPage = () => {
       badge={<StatusBadge status="active" label={`${users.length} Members`} />}
       actions={pageActions}
     >
+      <form className="settings-card" onSubmit={handleSaveProfileWhatsApp}>
+        <div className="card-header">
+          <div className="card-header-title">
+            <h3>Your WhatsApp Number</h3>
+          </div>
+        </div>
+        <FormField
+          id="profile-whatsapp-number"
+          label="WhatsApp number"
+          type="tel"
+          placeholder="e.g. 923001234567 or +447123456789"
+          value={profileWhatsAppNumber}
+          onChange={(e) => setProfileWhatsAppNumber(e.target.value)}
+          helperText="Include the country code. Assigned tasks will be sent to this number when it is registered on WhatsApp."
+        />
+        <div className="modal-actions-right">
+          <Button type="submit" variant="primary" isLoading={savingProfile}>
+            Save WhatsApp Number
+          </Button>
+        </div>
+      </form>
+
       {/* Search and Filters Bar */}
       <div className="filter-controls-bar">
         <div className="filter-search-box">
@@ -278,6 +321,16 @@ export const TeamPage = () => {
             onChange={(e) => setFormPassword(e.target.value)}
             helperText="The user will use this password to sign in."
             required
+          />
+
+          <FormField
+            id="create-whatsapp-number"
+            label="WhatsApp Number"
+            type="tel"
+            placeholder="e.g. 923001234567 or +447123456789"
+            value={formWhatsAppNumber}
+            onChange={(e) => setFormWhatsAppNumber(e.target.value)}
+            helperText="Include the country code. This number is used for task assignment notifications."
           />
 
           <FormField

@@ -113,6 +113,7 @@ export const AllTasksPage = () => {
   const [formDesc, setFormDesc] = useState('');
   const [formProject, setFormProject] = useState('');
   const [formAssignees, setFormAssignees] = useState([]);
+  const [assignee, setAssignee] = useState('');
   const [formStatus, setFormStatus] = useState('To Do');
   const [formPriority, setFormPriority] = useState('Medium');
   const [formStartDate, setFormStartDate] = useState('');
@@ -319,6 +320,7 @@ export const AllTasksPage = () => {
     setFormDesc('');
     setFormProject(projects[0]?._id || '');
     setFormAssignees([]);
+    setAssignee('');
     setFormStatus('To Do');
     setFormPriority('Medium');
     setFormStartDate('');
@@ -339,6 +341,7 @@ export const AllTasksPage = () => {
     setFormDesc(task.description || '');
     setFormProject(task.project?._id || task.project);
     setFormAssignees(task.assignees?.map((a) => a._id || a) || []);
+    setAssignee(task.assignees?.[0]?._id || task.assignees?.[0] || '');
     setFormStatus(task.status);
     setFormPriority(task.priority);
     setFormStartDate(task.startDate ? task.startDate.split('T')[0] : '');
@@ -366,7 +369,7 @@ export const AllTasksPage = () => {
         title: formTitle.trim(),
         description: formDesc.trim(),
         project: formProject,
-        assignees: formAssignees,
+        assignee: assignee || null,
         status: formStatus,
         priority: formPriority,
         startDate: formStartDate || null,
@@ -915,6 +918,23 @@ export const AllTasksPage = () => {
               <option value="">Select Target Project</option>
               {projects.map((p) => (
                 <option key={p._id} value={p._id}>{p.name}</option>
+              ))}
+            </select>
+          </FormField>
+
+          <FormField label="Assignee">
+            <select
+              className="input-field"
+              value={assignee}
+              onChange={(e) => setAssignee(e.target.value)}
+            >
+              <option value="">Unassigned</option>
+              {users.map((teamMember) => (
+                <option key={teamMember._id} value={teamMember._id}>
+                  {teamMember.name} {teamMember.whatsappNumber
+                    ? `(${teamMember.whatsappNumber})`
+                    : '(No WhatsApp)'}
+                </option>
               ))}
             </select>
           </FormField>
