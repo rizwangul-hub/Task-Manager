@@ -122,6 +122,13 @@ test('Baileys listener parses multiple allowed groups and handles all mode', () 
     ]);
     assert.equal(whatsappListenerInternals.isTargetGroup('120363000000000002@g.us'), true);
     assert.equal(whatsappListenerInternals.isTargetGroup('120363000000000003@g.us'), false);
+    assert.equal(whatsappListenerInternals.shouldProcessMessage({
+      key: {
+        id: 'outgoing-group-message',
+        remoteJid: '120363000000000002@g.us',
+        fromMe: true
+      }
+    }), true);
 
     process.env.PIXX_WHATSAPP_GROUP_ID = ' all ';
     assert.deepEqual(whatsappListenerInternals.getAllowedGroups(), ['all']);

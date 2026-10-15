@@ -112,6 +112,16 @@ const isTargetGroup = (remoteJid) => {
 const shouldIgnoreJid = (jid) =>
   typeof jid !== 'string' || jid.endsWith('@lid') || jid.endsWith('@broadcast');
 
+const shouldProcessMessage = (message) => {
+  const jid = message?.key?.remoteJid;
+  return Boolean(
+    message?.key?.id &&
+    !shouldIgnoreJid(jid) &&
+    jid.endsWith('@g.us') &&
+    isTargetGroup(jid)
+  );
+};
+
 /**
  * Returns true for Bad MAC / decrypt errors that are expected noise from
  * historical or status messages — these should not be logged as real errors.
@@ -164,15 +174,7 @@ const downloadImage = async (message, sockRef) => {
 const handleMessage = async (activeSock, message) => {
   const remoteJid = message.key?.remoteJid || '';
 
-  // Ignore: own messages, status broadcasts, LID syncs, non-group chats, or non-matching groups
-  if (
-    !message.key?.id ||
-    message.key.fromMe ||
-    remoteJid.endsWith('@lid') ||
-    remoteJid === 'status@broadcast' ||
-    !remoteJid.endsWith('@g.us') ||
-    !isTargetGroup(remoteJid)
-  ) return;
+  if (!shouldProcessMessage(message)) return;
 
   const messageId = message.key.id;
 
@@ -322,27 +324,28 @@ export const initWhatsAppListener = async () => {
     });
 
     // ── Incoming messages ───────────────────────────────────────────────────
-    newSock.ev.on('messages.upsert', ({ type, messages = [] }) => {
+    newSock.ev.on('messages.upsert', async ({ type, messages = [] }) => {
+      console.log(`[WA_RAW_EVENT] Received ${messages.length} message(s), type: ${type}`);
       if (type !== 'notify') return;
 
       for (const msg of messages) {
-        const jid = msg.key?.remoteJid;
-        if (
-          shouldIgnoreJid(jid) ||
-          !jid.endsWith('@g.us') ||
-          !isTargetGroup(jid)
-        ) continue;
-
-        console.log('📩 [WHATSAPP GROUP DETECTED]:', {
-          groupId: jid,
-          sender: msg.pushName || msg.key?.participant,
-          text: msg.message?.conversation ||
-                msg.message?.extendedTextMessage?.text ||
-                msg.message?.imageMessage?.caption ||
-                '[Media/Image]'
-        });
+        const jid = msg.key?.remoteJid || '';
+        if (jid.endsWith('@g.us')) {
+          const text = msg.message?.conversation ||
+            msg.message?.extendedTextMessage?.text ||
+            msg.message?.imageMessage?.caption ||
+            '';
+          console.log('🎯 [TARGET GROUP MESSAGE RECEIVED]:', {
+            jid,
+            sender: msg.pushName || msg.key?.participant || 'Self',
+            fromMe: msg.key?.fromMe,
+            text: text || '[Media/No Text]'
+          });
+        }
+        if (!shouldProcessMessage(msg)) continue;
 
         // Process task extraction with per-message error isolation.
+        console.log('[WA_INTAKE] Passing message to task parser...');
         void handleMessage(newSock, msg).catch((err) => {
           // Suppress expected Bad MAC / decrypt / SessionError noise
           const errMsg = err?.message || String(err || '');
@@ -400,6 +403,7 @@ export const whatsappListenerInternals = {
   isExpectedHistoryDecryptError,
   isAllowAllGroups,
   isTargetGroup,
+  shouldProcessMessage,
   getConfiguredGroupId,
   getAllowedGroups,
   shouldIgnoreJid
