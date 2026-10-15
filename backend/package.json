@@ -1,0 +1,47 @@
+{
+  "name": "pixxtechnologiees-task-manager-backend",
+  "version": "1.0.0",
+  "description": "Backend API for PixxTechnologiees Task Manager",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "lint": "node --check src/server.js && node --check src/app.js",
+    "seed:owner": "node src/scripts/initOwner.js",
+    "seed:admin": "node src/scripts/createAdmin.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "task-manager",
+    "pixxtechnologiees",
+    "express",
+    "mongoose"
+  ],
+  "author": "PixxTechnologiees",
+  "license": "ISC",
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "@whiskeysockets/baileys": "^6.7.24",
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.5.1",
+    "cookie": "^1.1.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.12.1",
+    "morgan": "^1.10.0",
+    "multer": "^2.4.0",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^10.1.1",
+    "pino": "^8.21.0",
+    "qrcode-terminal": "^0.12.0",
+    "redis": "^4.7.1",
+    "socket.io": "^4.8.4"
+  }
+}
