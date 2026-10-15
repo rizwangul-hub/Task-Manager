@@ -8,6 +8,8 @@ import {
 import { sendWhatsAppTaskNotification } from './whatsappService.js';
 import { logger } from '../utils/logger.js';
 
+const MAX_AUTOMATIC_RETRIES = 5;
+
 const buildAssignmentMessage = (task, contact) => [
   `Hello ${contact.fullName},`,
   '',
@@ -41,7 +43,10 @@ export const createTaskAssignmentNotificationService = ({
       {
         _id: notificationId,
         $or: [
-          { status: TASK_WHATSAPP_STATUSES.PENDING },
+          {
+            status: TASK_WHATSAPP_STATUSES.PENDING,
+            nextAttemptAt: { $lte: new Date() }
+          },
           { status: TASK_WHATSAPP_STATUSES.PROCESSING, processingStartedAt: { $lt: staleProcessingAt } }
         ]
       },
@@ -71,9 +76,17 @@ export const createTaskAssignmentNotificationService = ({
       );
 
       if (!result.success) {
-        notification.status = TASK_WHATSAPP_STATUSES.FAILED;
+        const canRetry = result.retryable && notification.automaticRetries < MAX_AUTOMATIC_RETRIES;
+        notification.status = canRetry ? TASK_WHATSAPP_STATUSES.PENDING : TASK_WHATSAPP_STATUSES.FAILED;
         notification.failureReason = result.reason || result.error || 'WhatsApp provider rejected the send request.';
         notification.processingStartedAt = null;
+        if (canRetry) {
+          notification.automaticRetries += 1;
+          notification.nextAttemptAt = new Date(Date.now() + Math.min(30 * 1000 * (2 ** (notification.automaticRetries - 1)), 15 * 60 * 1000));
+          serviceLogger.warn(`[WA_OUTBOX] Notification ${notification._id} will retry automatically.`);
+        } else {
+          serviceLogger.error(`[WA_OUTBOX] Notification ${notification._id} failed permanently: ${notification.failureReason}`);
+        }
         await notification.save();
         return;
       }
@@ -83,6 +96,7 @@ export const createTaskAssignmentNotificationService = ({
       notification.providerMessageId = result.messageId || null;
       notification.failureReason = null;
       notification.processingStartedAt = null;
+      notification.nextAttemptAt = null;
       await notification.save();
       await taskModel.updateOne(
         { _id: task._id, contactAssignmentId: notification.assignmentId },
@@ -92,6 +106,7 @@ export const createTaskAssignmentNotificationService = ({
       notification.status = TASK_WHATSAPP_STATUSES.FAILED;
       notification.failureReason = error.message;
       notification.processingStartedAt = null;
+      notification.nextAttemptAt = null;
       await notification.save();
       serviceLogger.error(`[WA_OUTBOX] Assignment notification ${notification._id} failed: ${error.message}`);
     }
@@ -101,6 +116,7 @@ export const createTaskAssignmentNotificationService = ({
     enqueue: async (task, contact) => {
       if (!task?.contactAssignmentId || !contact?.whatsappNumber) return null;
       try {
+        serviceLogger.info(`[WA_OUTBOX] Queued assignment notification for task ${task._id}.`);
         const notification = await notificationModel.create({
           task: task._id,
           contact: contact._id,
@@ -147,6 +163,7 @@ export const createTaskAssignmentNotificationService = ({
       notification.status = TASK_WHATSAPP_STATUSES.PENDING;
       notification.failureReason = null;
       notification.processingStartedAt = null;
+      notification.automaticRetries = 0;
       notification.nextAttemptAt = new Date();
       await notification.save();
       void deliver(notification._id).catch((error) => {

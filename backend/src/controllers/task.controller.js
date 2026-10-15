@@ -429,9 +429,7 @@ export const taskController = {
       }
 
       if (assignedContact) {
-        console.info(
-          `[TASK_ASSIGNMENT] Contact ${assignedContact.fullName} selected with number ${assignedContact.whatsappNumber}`
-        );
+        console.info(`[TASK_ASSIGNMENT] Queuing WhatsApp notification for contact ${assignedContact.fullName}.`);
         await taskAssignmentNotificationService.enqueue(populated, assignedContact);
       }
 
@@ -761,9 +759,7 @@ export const taskController = {
         .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
 
       if (contactAssignmentChanged && populated.assignedContact) {
-        console.info(
-          `[TASK_ASSIGNMENT] Contact ${populated.assignedContact.fullName} selected with number ${populated.assignedContact.whatsappNumber}`
-        );
+        console.info(`[TASK_ASSIGNMENT] Queuing WhatsApp notification for contact ${populated.assignedContact.fullName}.`);
         await taskAssignmentNotificationService.enqueue(populated, populated.assignedContact);
       }
 

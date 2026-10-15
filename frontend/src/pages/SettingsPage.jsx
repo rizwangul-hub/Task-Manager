@@ -5,6 +5,7 @@ import FormField from '../components/ui/FormField';
 import Button from '../components/ui/Button';
 import StatusBadge from '../components/ui/StatusBadge';
 import { notificationService } from '../services/notificationService';
+import { whatsappService } from '../services/whatsappService';
 import { userService } from '../services/userService';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
@@ -15,7 +16,9 @@ import {
   Bell,
   Mail,
   User as UserIcon,
-  Phone
+  Phone,
+  RefreshCw,
+  Send
 } from 'lucide-react';
 
 export const SettingsPage = () => {
@@ -30,6 +33,11 @@ export const SettingsPage = () => {
   // User Profile & WhatsApp state
   const [profileWhatsAppNumber, setProfileWhatsAppNumber] = useState(user?.whatsappNumber || '');
   const [savingProfile, setSavingProfile] = useState(false);
+  const [whatsappDiagnostics, setWhatsAppDiagnostics] = useState(null);
+  const [whatsappDiagnosticsError, setWhatsAppDiagnosticsError] = useState('');
+  const [testWhatsAppNumber, setTestWhatsAppNumber] = useState('');
+  const [testRecipientConsented, setTestRecipientConsented] = useState(false);
+  const [sendingTestWhatsApp, setSendingTestWhatsApp] = useState(false);
 
   useEffect(() => {
     if (user?.whatsappNumber !== undefined) {
@@ -71,6 +79,22 @@ export const SettingsPage = () => {
     fetchPrefs();
   }, [fetchPrefs]);
 
+  const fetchWhatsAppDiagnostics = useCallback(async () => {
+    try {
+      const response = await whatsappService.getDiagnostics();
+      setWhatsAppDiagnostics(response.data?.diagnostics || null);
+      setWhatsAppDiagnosticsError('');
+    } catch (error) {
+      setWhatsAppDiagnosticsError(error.message || 'WhatsApp diagnostics are unavailable.');
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchWhatsAppDiagnostics();
+    const timer = setInterval(fetchWhatsAppDiagnostics, 10_000);
+    return () => clearInterval(timer);
+  }, [fetchWhatsAppDiagnostics]);
+
   const handleGeneralSave = (e) => {
     e.preventDefault();
     toast.success('Workspace preferences saved locally for this session.');
@@ -110,6 +134,20 @@ export const SettingsPage = () => {
       toast.error(err.message || 'Could not save your WhatsApp number.');
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  const handleSendTestWhatsApp = async (e) => {
+    e.preventDefault();
+    setSendingTestWhatsApp(true);
+    try {
+      await whatsappService.sendTestMessage(testWhatsAppNumber.trim());
+      toast.success('Test message was accepted by Baileys.');
+      await fetchWhatsAppDiagnostics();
+    } catch (error) {
+      toast.error(error.message || 'Could not send the WhatsApp test message.');
+    } finally {
+      setSendingTestWhatsApp(false);
     }
   };
 
@@ -161,6 +199,98 @@ export const SettingsPage = () => {
                 Save WhatsApp Number
               </Button>
             </div>
+          </form>
+        </div>
+
+        <div className="settings-card">
+          <div className="card-header">
+            <div className="card-header-title">
+              <Phone size={18} className="card-title-icon" />
+              <h3>WhatsApp Assignment Sender</h3>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              onClick={fetchWhatsAppDiagnostics}
+            >
+              Refresh
+            </Button>
+          </div>
+
+          <div className="settings-diagnostics-list">
+            <div className="diagnostic-row">
+              <div className="diagnostic-label-col">
+                <span className="diagnostic-title">WhatsApp Provider</span>
+                <span className="diagnostic-desc">{whatsappDiagnostics?.provider || 'Baileys (WhatsApp Web Multi-Device)'}</span>
+              </div>
+              <StatusBadge
+                status={whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
+                  whatsappDiagnostics?.connectionStatus === 'connecting' ? 'degraded' : 'offline'}
+                label={whatsappDiagnostics?.connectionStatus?.toUpperCase() || 'DISCONNECTED'}
+              />
+            </div>
+            <div className="diagnostic-row">
+              <div className="diagnostic-label-col">
+                <span className="diagnostic-title">Sending Capability</span>
+                <span className="diagnostic-desc">
+                  {whatsappDiagnostics?.authenticatedUser
+                    ? `Connected as ${whatsappDiagnostics.authenticatedUser}`
+                    : 'Paired session authorization status'}
+                </span>
+              </div>
+              <StatusBadge
+                status={whatsappDiagnostics?.sendingCapabilityStatus === 'ready' || whatsappDiagnostics?.authenticatedUser ? 'healthy' : 'offline'}
+                label={whatsappDiagnostics?.sendingCapabilityStatus === 'ready' ? 'READY' : 'UNAVAILABLE'}
+              />
+            </div>
+            <p className="text-sm text-muted">
+              <strong>Last successful send:</strong>{' '}
+              {whatsappDiagnostics?.lastSuccessfulSendAt
+                ? new Date(whatsappDiagnostics.lastSuccessfulSendAt).toLocaleString()
+                : 'No successful sends recorded'}
+            </p>
+            {(whatsappDiagnosticsError || whatsappDiagnostics?.lastError) && (
+              <p className="text-danger" role="status">
+                <strong>Error:</strong> {whatsappDiagnosticsError || whatsappDiagnostics.lastError}
+              </p>
+            )}
+          </div>
+
+          <form onSubmit={handleSendTestWhatsApp} className="settings-form">
+            <FormField
+              id="whatsapp-test-number"
+              label="Consenting test recipient"
+              type="tel"
+              placeholder="e.g. +923179500901"
+              value={testWhatsAppNumber}
+              onChange={(event) => setTestWhatsAppNumber(event.target.value)}
+              required
+            />
+            <label className="pref-toggle-item">
+              <input
+                type="checkbox"
+                checked={testRecipientConsented}
+                onChange={(event) => setTestRecipientConsented(event.target.checked)}
+                className="pref-checkbox"
+              />
+              <span className="pref-label-group">
+                <span className="pref-title">The recipient agreed to receive this test message.</span>
+              </span>
+            </label>
+            <Button
+              type="submit"
+              variant="primary"
+              icon={Send}
+              isLoading={sendingTestWhatsApp}
+              disabled={!testRecipientConsented || !testWhatsAppNumber.trim()}
+            >
+              Send Test Message
+            </Button>
+            <p className="text-muted">
+              “Sent” means Baileys accepted the message. WhatsApp delivery confirmation is shown separately.
+            </p>
           </form>
         </div>
 
@@ -417,6 +547,18 @@ export const SettingsPage = () => {
                 <span className="diagnostic-desc">Node-cron recurring deadline processor</span>
               </div>
               <StatusBadge status="healthy" label="ENABLED" />
+            </div>
+
+            <div className="diagnostic-row">
+              <div className="diagnostic-label-col">
+                <span className="diagnostic-title">WhatsApp Assignment Dispatcher</span>
+                <span className="diagnostic-desc">Baileys multi-device notification sender</span>
+              </div>
+              <StatusBadge
+                status={whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
+                  whatsappDiagnostics?.connectionStatus === 'connecting' ? 'degraded' : 'offline'}
+                label={whatsappDiagnostics?.connectionStatus?.toUpperCase() || 'DISCONNECTED'}
+              />
             </div>
           </div>
         </div>

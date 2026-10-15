@@ -4,6 +4,7 @@ import Button from '../ui/Button';
 import LoadingState from '../ui/LoadingState';
 import EmptyState from '../ui/EmptyState';
 import ErrorState from '../ui/ErrorState';
+import StatusBadge from '../ui/StatusBadge';
 import { taskService } from '../../services/taskService';
 import { userService } from '../../services/userService';
 import { useAuth } from '../../hooks/useAuth';
@@ -108,7 +109,7 @@ export const TaskDetailsModal = ({
 
   useEffect(() => {
     const isSending = whatsappNotifications.some(({ status }) =>
-      status === 'pending' || status === 'processing'
+      status === 'pending' || status === 'processing' || status === 'server_ack'
     );
     if (!isOpen || !taskId || !isSending) return undefined;
 
@@ -570,9 +571,26 @@ export const TaskDetailsModal = ({
                     <div className="mt-3 space-y-3">
                       {whatsappNotifications.map((notification) => (
                         <div key={notification._id} className="border-t pt-3">
-                          <p><strong>Status:</strong> <span className="capitalize">{notification.status}</span></p>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                            <strong>Status:</strong>
+                            {notification.status === 'delivered' ? (
+                              <StatusBadge status="completed" label="✓ Delivered" size="sm" />
+                            ) : notification.status === 'sent' || notification.status === 'server_ack' ? (
+                              <StatusBadge status="active" label="✓ Sent" size="sm" />
+                            ) : notification.status === 'processing' ? (
+                              <StatusBadge status="in_progress" label="Processing" size="sm" />
+                            ) : notification.status === 'failed' ? (
+                              <StatusBadge status="offline" label="Failed" size="sm" />
+                            ) : (
+                              <StatusBadge status="pending" label="Pending" size="sm" />
+                            )}
+                          </div>
                           <p><strong>Contact:</strong> {notification.contactName} · {formatWhatsAppNumber(notification.recipientNumber)}</p>
-                          {notification.sentAt && <p><strong>Sent:</strong> {formatDateTime(notification.sentAt)}</p>}
+                          {notification.createdAt && <p><strong>Attempt started:</strong> {formatDateTime(notification.createdAt)}</p>}
+                          {notification.attempts > 0 && <p><strong>Attempts:</strong> {notification.attempts}</p>}
+                          {notification.sentAt && <p><strong>Accepted by Baileys:</strong> {formatDateTime(notification.sentAt)}</p>}
+                          {notification.serverAckAt && <p><strong>Server acknowledged:</strong> {formatDateTime(notification.serverAckAt)}</p>}
+                          {notification.deliveredAt && <p><strong>Delivery confirmed:</strong> {formatDateTime(notification.deliveredAt)}</p>}
                           {notification.providerMessageId && <p><strong>Provider message ID:</strong> {notification.providerMessageId}</p>}
                           {notification.failureReason && <p className="text-danger"><strong>Failure:</strong> {notification.failureReason}</p>}
                           {notification.status === 'failed' && canManage && (

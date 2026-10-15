@@ -185,7 +185,7 @@ test('outbox records provider failures, retries safely, and deduplicates assignm
         ? { success: true, messageId: 'provider-message-1' }
         : { success: false, reason: 'Baileys offline' };
     },
-    serviceLogger: { error() {} }
+    serviceLogger: { info() {}, warn() {}, error() {} }
   });
   const waitForStatus = async (status) => {
     for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -209,6 +209,82 @@ test('outbox records provider failures, retries safely, and deduplicates assignm
 
   await service.enqueue(task, contact);
   await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sendCount, 2);
+});
+
+test('outbox automatically retries temporary Baileys disconnects and keeps the same assignment record', async () => {
+  let record = null;
+  let sendCount = 0;
+  const task = {
+    _id: 'task-retry',
+    title: 'Prepare report',
+    priority: 'High',
+    contactAssignmentId: 'assignment-retry',
+    project: { name: 'Finance' }
+  };
+  const contact = {
+    _id: 'contact-retry',
+    fullName: 'Ahmed Khan',
+    whatsappNumber: '+923179500901',
+    toObject() { return { fullName: this.fullName }; }
+  };
+  const notificationModel = {
+    async create(data) {
+      record = {
+        ...data,
+        _id: 'notification-retry',
+        attempts: 0,
+        automaticRetries: 0,
+        nextAttemptAt: new Date(),
+        async save() {}
+      };
+      return record;
+    },
+    async findOneAndUpdate(_filter, update) {
+      if (record.status !== TASK_WHATSAPP_STATUSES.PENDING) return null;
+      record.status = update.$set.status;
+      record.processingStartedAt = update.$set.processingStartedAt;
+      record.attempts += update.$inc.attempts;
+      return record;
+    },
+    find() {
+      return {
+        select() { return this; },
+        limit: async () => [{ _id: record._id }]
+      };
+    }
+  };
+  const service = createTaskAssignmentNotificationService({
+    notificationModel,
+    contactModel: { findById: async () => contact },
+    taskModel: {
+      findById: () => ({ populate: async () => task }),
+      updateOne: async () => {}
+    },
+    sendNotification: async () => {
+      sendCount += 1;
+      return sendCount === 1
+        ? { success: false, retryable: true, reason: 'Socket reconnecting' }
+        : { success: true, messageId: 'message-after-reconnect' };
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  const waitForStatus = async (status) => {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (record?.status === status) return;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.fail(`Notification did not reach ${status} status.`);
+  };
+
+  await service.enqueue(task, contact);
+  await waitForStatus(TASK_WHATSAPP_STATUSES.PENDING);
+  assert.equal(record.automaticRetries, 1);
+  record.nextAttemptAt = new Date();
+  await service.processPending();
+  await waitForStatus(TASK_WHATSAPP_STATUSES.SENT);
+  assert.equal(record.attempts, 2);
+  assert.equal(record.providerMessageId, 'message-after-reconnect');
   assert.equal(sendCount, 2);
 });
 
@@ -380,6 +456,101 @@ test('replayed task creation keys return the existing task without creating a se
     Task.create = originals.taskCreate;
     taskAssignmentNotificationService.getForTask = originals.getForTask;
     taskAssignmentNotificationService.enqueue = originals.enqueue;
+  }
+});
+
+test('task field edits do not notify again, but contact reassignment queues a new notification', async () => {
+  const ownerId = new mongoose.Types.ObjectId();
+  const projectId = new mongoose.Types.ObjectId();
+  const taskId = new mongoose.Types.ObjectId();
+  const originalContactId = new mongoose.Types.ObjectId();
+  const nextContactId = new mongoose.Types.ObjectId();
+  const nextContact = {
+    _id: nextContactId,
+    fullName: 'New Assignee',
+    whatsappNumber: '+447123456789'
+  };
+  const task = {
+    _id: taskId,
+    title: 'Original title',
+    description: '',
+    project: { _id: projectId },
+    assignees: [],
+    assignedContact: originalContactId,
+    contactAssignmentId: new mongoose.Types.ObjectId(),
+    contactAssignedAt: new Date(),
+    status: 'To Do',
+    priority: 'Medium',
+    startDate: null,
+    dueDate: null,
+    customFields: [],
+    async save() {},
+    toJSON() { return this; }
+  };
+  const originals = {
+    taskFindById: Task.findById,
+    contactFindOne: Contact.findOne,
+    logEvent: TaskEvent.logEvent,
+    enqueue: taskAssignmentNotificationService.enqueue,
+    emitTaskUpdate: socketService.emitTaskUpdate
+  };
+  let enqueueCount = 0;
+  const makeQuery = (value) => ({
+    populate() { return this; },
+    then(resolve, reject) {
+      return Promise.resolve(typeof value === 'function' ? value() : value).then(resolve, reject);
+    }
+  });
+
+  try {
+    Task.findById = () => makeQuery(task);
+    Contact.findOne = async () => nextContact;
+    TaskEvent.logEvent = async () => {};
+    taskAssignmentNotificationService.enqueue = async () => { enqueueCount += 1; };
+    socketService.emitTaskUpdate = () => {};
+    const responseFor = () => ({
+      status(code) { this.statusCode = code; return this; },
+      json(payload) { this.payload = payload; return this; }
+    });
+
+    const unrelatedResponse = responseFor();
+    Task.findById = (callCount => () => makeQuery(++callCount === 1
+      ? task
+      : {
+          ...task,
+          assignedContact: { _id: originalContactId, fullName: 'Original Contact' },
+          toJSON() { return this; }
+        }))(0);
+    await taskController.updateTask({
+      params: { id: taskId.toString() },
+      body: { title: 'Updated title', priority: 'High' },
+      user: { _id: ownerId, role: 'ADMIN' }
+    }, unrelatedResponse, (error) => { throw error; });
+    assert.equal(enqueueCount, 0);
+
+    let findCall = 0;
+    Task.findById = () => makeQuery(++findCall === 1
+      ? task
+      : {
+          ...task,
+          assignedContact: nextContact,
+          toJSON() { return this; }
+        });
+    const reassignmentResponse = responseFor();
+    await taskController.updateTask({
+      params: { id: taskId.toString() },
+      body: { contactId: nextContactId.toString() },
+      user: { _id: ownerId, role: 'ADMIN' }
+    }, reassignmentResponse, (error) => { throw error; });
+
+    assert.equal(enqueueCount, 1);
+    assert.equal(reassignmentResponse.statusCode, 200);
+  } finally {
+    Task.findById = originals.taskFindById;
+    Contact.findOne = originals.contactFindOne;
+    TaskEvent.logEvent = originals.logEvent;
+    taskAssignmentNotificationService.enqueue = originals.enqueue;
+    socketService.emitTaskUpdate = originals.emitTaskUpdate;
   }
 });
 
