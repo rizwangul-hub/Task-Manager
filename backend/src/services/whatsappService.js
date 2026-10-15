@@ -88,6 +88,22 @@ const getMediaFileName = (messageId, mimeType = 'image/jpeg') => {
   return `whatsapp-${safeId}.${extension}`;
 };
 
+/** Helper to retrieve the active WhatsApp group ID configuration */
+const getConfiguredGroupId = () =>
+  (process.env.PIXX_WHATSAPP_GROUP_ID || process.env.WHATSAPP_GROUP_ID || env.WHATSAPP.groupId || '').trim();
+
+/** Check if group filter is set to 'all' or empty, allowing any group */
+const isAllowAllGroups = () => {
+  const groupId = getConfiguredGroupId();
+  return !groupId || groupId.toLowerCase() === 'all';
+};
+
+/** Determine whether an incoming group message is permitted for processing */
+const isTargetGroup = (remoteJid) => {
+  if (isAllowAllGroups()) return true;
+  return remoteJid === getConfiguredGroupId();
+};
+
 /**
  * Returns true for Bad MAC / decrypt errors that are expected noise from
  * historical or status messages — these should not be logged as real errors.
@@ -139,13 +155,13 @@ const downloadImage = async (message, sockRef) => {
 const handleMessage = async (activeSock, message) => {
   const remoteJid = message.key?.remoteJid || '';
 
-  // Ignore: own messages, status broadcasts, non-group chats, wrong group
+  // Ignore: own messages, status broadcasts, non-group chats, or non-matching groups
   if (
     !message.key?.id ||
     message.key.fromMe ||
     remoteJid === 'status@broadcast' ||
     !remoteJid.endsWith('@g.us') ||
-    (env.WHATSAPP.groupId && remoteJid !== env.WHATSAPP.groupId)
+    !isTargetGroup(remoteJid)
   ) return;
 
   const messageId = message.key.id;
@@ -217,8 +233,8 @@ const handleMessage = async (activeSock, message) => {
 export const initWhatsAppListener = async () => {
   if (initializing) return sock;
   if (stopped) return null;
-  if (!env.WHATSAPP.groupId) {
-    logger.info('[WA] Baileys listener disabled: WhatsApp group ID not configured.');
+  if (process.env.ENABLE_WHATSAPP === 'false' || process.env.WHATSAPP_ENABLED === 'false') {
+    logger.info('[WA] Baileys listener disabled via configuration flag.');
     return null;
   }
 
@@ -266,7 +282,10 @@ export const initWhatsAppListener = async () => {
       }
 
       if (update.connection === 'open') {
-        logger.info(`[WA] Baileys connected — listening on group ${env.WHATSAPP.groupId}.`);
+        const mode = isAllowAllGroups()
+          ? 'ALL groups ("all" mode active)'
+          : `group ${getConfiguredGroupId()}`;
+        logger.info(`[WA] Baileys connected — listening on ${mode}.`);
       }
 
       if (update.connection === 'close') {
@@ -299,12 +318,26 @@ export const initWhatsAppListener = async () => {
     newSock.ev.on('messages.upsert', ({ type, messages = [] }) => {
       if (type !== 'notify') return;
 
-      for (const message of messages) {
-        void handleMessage(newSock, message).catch((err) => {
+      for (const msg of messages) {
+        const remoteJid = msg.key?.remoteJid || '';
+
+        // 1. Log incoming WhatsApp group messages and JIDs clearly
+        if (remoteJid.endsWith('@g.us')) {
+          console.log('📩 [WHATSAPP GROUP DETECTED]:', {
+            groupId: remoteJid,
+            sender: msg.pushName || msg.key?.participant,
+            text: msg.message?.conversation ||
+                  msg.message?.extendedTextMessage?.text ||
+                  msg.message?.imageMessage?.caption ||
+                  '[Media/Image]'
+          });
+        }
+
+        void handleMessage(newSock, msg).catch((err) => {
           // Suppress expected Bad MAC / decrypt noise from history replay
-          if (isExpectedHistoryDecryptError(err, message, type)) return;
+          if (isExpectedHistoryDecryptError(err, msg, type)) return;
           logger.error(
-            `[WA] Failed to ingest message ${message.key?.id ?? 'unknown'}:`,
+            `[WA] Failed to ingest message ${msg.key?.id ?? 'unknown'}:`,
             err
           );
         });
@@ -351,5 +384,8 @@ export const closeWhatsAppListener = async () => {
 export const whatsappListenerInternals = {
   getGroupTitle,
   getMessageText,
-  isExpectedHistoryDecryptError
+  isExpectedHistoryDecryptError,
+  isAllowAllGroups,
+  isTargetGroup,
+  getConfiguredGroupId
 };
