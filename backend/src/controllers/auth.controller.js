@@ -46,7 +46,8 @@ export const authController = {
         message: 'Authentication successful',
         data: {
           user: user.toJSON(),
-          accessToken
+          accessToken,
+          refreshToken
         }
       });
     } catch (error) {
@@ -101,7 +102,8 @@ export const authController = {
         status: 'success',
         data: {
           user: user.toJSON(),
-          accessToken
+          accessToken,
+          refreshToken: newRefreshToken
         }
       });
     } catch (error) {

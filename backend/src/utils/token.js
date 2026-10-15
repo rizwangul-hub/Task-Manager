@@ -48,9 +48,9 @@ export const verifyRefreshToken = (token) => {
  * Attach secure, HTTP-only authentication cookies to response
  */
 export const setAuthCookies = (res, accessToken, refreshToken) => {
-  const isProduction = env.NODE_ENV === 'production' || env.JWT.cookieSecure;
-  const sameSite = env.JWT.cookieSameSite || (isProduction ? 'none' : 'lax');
-  const secure = isProduction || sameSite === 'none';
+  const isCloudOrProd = env.NODE_ENV === 'production' || process.env.VERCEL === '1' || env.JWT.cookieSecure;
+  const sameSite = env.JWT.cookieSameSite || (isCloudOrProd ? 'none' : 'lax');
+  const secure = isCloudOrProd || sameSite === 'none';
 
   // Access token cookie (short-lived)
   res.cookie('access_token', accessToken, {
@@ -60,13 +60,12 @@ export const setAuthCookies = (res, accessToken, refreshToken) => {
     maxAge: 15 * 60 * 1000 // 15 minutes
   });
 
-  // Refresh token cookie (long-lived, restricted path)
+  // Refresh token cookie (long-lived)
   if (refreshToken) {
     res.cookie('refresh_token', refreshToken, {
       httpOnly: true,
       secure,
       sameSite,
-      path: '/api/auth',
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
   }
@@ -76,9 +75,9 @@ export const setAuthCookies = (res, accessToken, refreshToken) => {
  * Clear authentication cookies on logout
  */
 export const clearAuthCookies = (res) => {
-  const isProduction = env.NODE_ENV === 'production' || env.JWT.cookieSecure;
-  const sameSite = env.JWT.cookieSameSite || (isProduction ? 'none' : 'lax');
-  const secure = isProduction || sameSite === 'none';
+  const isCloudOrProd = env.NODE_ENV === 'production' || process.env.VERCEL === '1' || env.JWT.cookieSecure;
+  const sameSite = env.JWT.cookieSameSite || (isCloudOrProd ? 'none' : 'lax');
+  const secure = isCloudOrProd || sameSite === 'none';
 
   res.clearCookie('access_token', {
     httpOnly: true,
@@ -89,7 +88,6 @@ export const clearAuthCookies = (res) => {
   res.clearCookie('refresh_token', {
     httpOnly: true,
     secure,
-    sameSite,
-    path: '/api/auth'
+    sameSite
   });
 };
