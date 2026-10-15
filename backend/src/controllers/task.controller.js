@@ -7,6 +7,7 @@ import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { notificationService } from '../services/notification.service.js';
 import { socketService } from '../services/socket.service.js';
 import { taskAssignmentNotificationService } from '../services/taskAssignmentNotification.service.js';
+import { sendWhatsAppTaskNotification } from '../services/whatsappService.js';
 import { buildCsvString } from '../utils/csv.js';
 import { AppError } from '../middleware/errorHandler.js';
 
