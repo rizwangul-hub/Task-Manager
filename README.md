@@ -57,6 +57,20 @@ Task-Manager/
 └── README.md                     # Master documentation
 ```
 
+## Contacts & WhatsApp Task Assignment
+
+The workspace owner manages external task recipients from **Contacts**. Contacts are not application users and do not need accounts or passwords. A contact requires a name and WhatsApp number; numbers are normalized to international form and duplicate numbers are rejected. Deleting a contact from the UI deactivates it, preserving task assignments and notification history.
+
+Tasks created from the All Tasks form require an active contact. Reassigning a task to a different contact creates a separate WhatsApp assignment notification; edits to other task fields do not resend it. Notification attempts are tracked in the backend outbox and can be retried from Task Details after a failure. `Sent` indicates Baileys accepted the send request; it is not a WhatsApp delivery receipt.
+
+### Manual WhatsApp delivery check
+
+1. Start the persistent backend (`cd backend && npm run dev`) and make sure its Baileys session is authenticated and connected. The serverless deployment does not run the persistent Baileys listener.
+2. Sign in as the workspace owner, add a contact whose number is opted in to receive the task assignment, and create a task assigned to that contact.
+3. Confirm the task remains saved and the Task Details panel records `Pending`, then `Sent` after Baileys accepts the request. Verify receipt on the recipient device separately; the application does not claim delivery without a supported receipt.
+4. To test failure handling, temporarily disconnect Baileys, create an assignment, confirm a `Failed` record and failure reason, restore the connection, and use **Retry WhatsApp notification** in Task Details.
+5. Do not use business-initiated messaging for recipients who have not consented. Baileys Web does not provide WhatsApp Business Cloud API template enforcement; comply with WhatsApp policies and applicable local laws.
+
 ---
 
 ## User Roles & Permissions

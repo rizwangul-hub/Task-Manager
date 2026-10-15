@@ -9,6 +9,14 @@ export const taskService = {
     return apiClient.get(`/tasks/${id}`);
   },
 
+  getWhatsAppNotifications: async (taskId) => {
+    return apiClient.get(`/tasks/${taskId}/whatsapp-notifications`);
+  },
+
+  retryWhatsAppNotification: async (taskId, notificationId) => {
+    return apiClient.post(`/tasks/${taskId}/whatsapp-notifications/${notificationId}/retry`);
+  },
+
   createTask: async (taskData) => {
     return apiClient.post('/tasks', taskData);
   },

@@ -55,12 +55,31 @@ const taskSchema = new mongoose.Schema(
       ref: 'User',
       required: [true, 'Task creator reference is required']
     },
+    creationRequestId: {
+      type: String,
+      trim: true,
+      default: undefined,
+      select: false
+    },
     assignees: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
       }
     ],
+    assignedContact: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Contact',
+      default: null
+    },
+    contactAssignmentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null
+    },
+    contactAssignedAt: {
+      type: Date,
+      default: null
+    },
     status: {
       type: String,
       enum: {
@@ -186,6 +205,14 @@ taskSchema.index({ priority: 1 });
 taskSchema.index({ dueDate: 1 });
 taskSchema.index({ isArchived: 1 });
 taskSchema.index({ title: 'text', description: 'text' });
+taskSchema.index(
+  { creator: 1, creationRequestId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { creationRequestId: { $type: 'string' } },
+    name: 'task_creation_request_once'
+  }
+);
 taskSchema.index(
   { whatsappMessageId: 1 },
   { unique: true, sparse: true, name: 'whatsapp_message_id_unique' }

@@ -8,6 +8,7 @@ import { taskService } from '../../services/taskService';
 import { userService } from '../../services/userService';
 import { useAuth } from '../../hooks/useAuth';
 import { useToast } from '../../hooks/useToast';
+import { formatWhatsAppNumber } from '../../utils/phone';
 import {
   formatDate,
   formatDateTime,
@@ -45,6 +46,9 @@ export const TaskDetailsModal = ({
 
   const [activeTab, setActiveTab] = useState('overview');
   const [task, setTask] = useState(null);
+  const [whatsappNotifications, setWhatsappNotifications] = useState([]);
+  const [whatsappHistoryError, setWhatsappHistoryError] = useState('');
+  const [retryingNotificationId, setRetryingNotificationId] = useState(null);
   const [loadingTask, setLoadingTask] = useState(false);
   const [taskError, setTaskError] = useState(null);
 
@@ -81,12 +85,51 @@ export const TaskDetailsModal = ({
     try {
       const res = await taskService.getTaskById(taskId);
       setTask(res.data.task);
+      setWhatsappNotifications(res.data.task.whatsappNotifications || []);
+      setWhatsappHistoryError('');
     } catch (err) {
       setTaskError(err.message || 'Failed to load task details.');
     } finally {
       setLoadingTask(false);
     }
   }, [taskId]);
+
+  const loadWhatsAppNotifications = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const response = await taskService.getWhatsAppNotifications(taskId);
+      setWhatsappNotifications(response.data.notifications || []);
+      setWhatsappHistoryError('');
+    } catch (error) {
+      setWhatsappHistoryError(error.message || 'Could not refresh WhatsApp notification history.');
+      throw error;
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    const isSending = whatsappNotifications.some(({ status }) =>
+      status === 'pending' || status === 'processing'
+    );
+    if (!isOpen || !taskId || !isSending) return undefined;
+
+    const timer = setInterval(() => {
+      loadWhatsAppNotifications().catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [isOpen, taskId, whatsappNotifications, loadWhatsAppNotifications]);
+
+  const handleRetryWhatsAppNotification = async (notificationId) => {
+    setRetryingNotificationId(notificationId);
+    try {
+      await taskService.retryWhatsAppNotification(taskId, notificationId);
+      toast.success('WhatsApp notification retry queued.');
+      await loadWhatsAppNotifications();
+    } catch (err) {
+      toast.error(err.message || 'Could not retry WhatsApp notification.');
+    } finally {
+      setRetryingNotificationId(null);
+    }
+  };
 
   // Fetch Activity
   const loadActivity = useCallback(async () => {
@@ -497,6 +540,54 @@ export const TaskDetailsModal = ({
                     <p className="task-full-desc">{task.description}</p>
                   ) : (
                     <p className="text-muted italic">No detailed description provided for this deliverable.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="overview-section">
+                <h4 className="section-label">Assignment & WhatsApp History</h4>
+                <div className="task-desc-box">
+                  <p>
+                    <strong>Assigned contact:</strong>{' '}
+                    {task.assignedContact?.fullName || 'Unassigned'}
+                    {task.assignedContact?.whatsappNumber && ` · ${formatWhatsAppNumber(task.assignedContact.whatsappNumber)}`}
+                    {task.assignedContact && !task.assignedContact.isActive && ' (Inactive contact)'}
+                  </p>
+                  {task.contactAssignedAt && (
+                    <p><strong>Assigned:</strong> {formatDateTime(task.contactAssignedAt)}</p>
+                  )}
+                  {whatsappHistoryError && (
+                    <p className="text-danger" role="status">{whatsappHistoryError}</p>
+                  )}
+                  {whatsappNotifications.length === 0 ? (
+                    <p className="text-muted italic mt-2">
+                      {task.assignedContact ? 'No WhatsApp notification has been recorded.' : 'Assign a contact to create WhatsApp notification history.'}
+                    </p>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      {whatsappNotifications.map((notification) => (
+                        <div key={notification._id} className="border-t pt-3">
+                          <p><strong>Status:</strong> <span className="capitalize">{notification.status}</span></p>
+                          <p><strong>Contact:</strong> {notification.contactName} · {formatWhatsAppNumber(notification.recipientNumber)}</p>
+                          {notification.sentAt && <p><strong>Sent:</strong> {formatDateTime(notification.sentAt)}</p>}
+                          {notification.providerMessageId && <p><strong>Provider message ID:</strong> {notification.providerMessageId}</p>}
+                          {notification.failureReason && <p className="text-danger"><strong>Failure:</strong> {notification.failureReason}</p>}
+                          {notification.status === 'failed' && canManage && (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              isLoading={retryingNotificationId === notification._id}
+                              disabled={Boolean(retryingNotificationId)}
+                              onClick={() => handleRetryWhatsAppNotification(notification._id)}
+                              className="mt-2"
+                            >
+                              Retry WhatsApp notification
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>

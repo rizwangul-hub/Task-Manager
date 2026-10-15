@@ -9,16 +9,18 @@ import EmptyState from '../components/ui/EmptyState';
 import LoadingState from '../components/ui/LoadingState';
 import ErrorState from '../components/ui/ErrorState';
 import TaskDetailsModal from '../components/tasks/TaskDetailsModal';
+import ContactFormModal from '../components/contacts/ContactFormModal';
 import TaskBoard from '../components/tasks/TaskBoard';
 import KanbanBoard from '../components/kanban/KanbanBoard';
 import TimelineView from '../components/timeline/TimelineView';
 import { taskService } from '../services/taskService';
 import { socketService } from '../services/socket';
 import { projectService } from '../services/projectService';
-import { userService } from '../services/userService';
+import { contactService } from '../services/contactService';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../hooks/useAuth';
 import { isTaskOverdue, formatDate } from '../utils/date';
+import { formatWhatsAppNumber } from '../utils/phone';
 import {
   ListTodo,
   Plus,
@@ -85,7 +87,7 @@ export const AllTasksPage = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
-  const [assigneeFilter, setAssigneeFilter] = useState('');
+  const [contactFilter, setContactFilter] = useState('');
   const [dueDateFrom, setDueDateFrom] = useState('');
   const [dueDateTo, setDueDateTo] = useState('');
   const [groupBy, setGroupBy] = useState('project'); // 'none' | 'status' | 'project' | 'priority' | 'groupTitle'
@@ -96,7 +98,9 @@ export const AllTasksPage = () => {
 
   // Metadata
   const [projects, setProjects] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [contactSearch, setContactSearch] = useState('');
+  const [isQuickContactOpen, setIsQuickContactOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   // Modals state
@@ -110,16 +114,14 @@ export const AllTasksPage = () => {
 
   // Form Fields
   const [formTitle, setFormTitle] = useState('');
+  const [creationRequestId, setCreationRequestId] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formProject, setFormProject] = useState('');
-  const [formAssignees, setFormAssignees] = useState([]);
-  const [assignee, setAssignee] = useState('');
+  const [contactId, setContactId] = useState('');
   const [formStatus, setFormStatus] = useState('To Do');
   const [formPriority, setFormPriority] = useState('Medium');
   const [formStartDate, setFormStartDate] = useState('');
   const [formDueDate, setFormDueDate] = useState('');
-  const [sendToWhatsApp, setSendToWhatsApp] = useState(false);
-  const [whatsappTarget, setWhatsappTarget] = useState('');
   const [formError, setFormError] = useState('');
 
   // Save view preference
@@ -160,13 +162,10 @@ export const AllTasksPage = () => {
   };
 
   const handleBoardQuickCreate = async (projectId, title) => {
-    try {
-      await taskService.createTask({ project: projectId, title, status: 'To Do' });
-      toast.success('Task created.');
-      await fetchTasks();
-    } catch (err) {
-      toast.error(err.message || 'Could not create task.');
-    }
+    resetForm();
+    setFormProject(projectId);
+    setFormTitle(title);
+    setIsCreateModalOpen(true);
   };
 
   // Fetch Tasks with Server-side Pagination & Filters
@@ -181,7 +180,7 @@ export const AllTasksPage = () => {
         status: statusFilter || undefined,
         priority: priorityFilter || undefined,
         project: projectFilter || undefined,
-        assignee: assigneeFilter || undefined,
+        contactId: contactFilter || undefined,
         dueDateFrom: dueDateFrom || undefined,
         dueDateTo: dueDateTo || undefined,
         sortBy,
@@ -198,7 +197,7 @@ export const AllTasksPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, viewMode, search, statusFilter, priorityFilter, projectFilter, assigneeFilter, dueDateFrom, dueDateTo, sortBy, sortOrder]);
+  }, [page, limit, viewMode, search, statusFilter, priorityFilter, projectFilter, contactFilter, dueDateFrom, dueDateTo, sortBy, sortOrder]);
 
   // Load project metadata
   useEffect(() => {
@@ -206,11 +205,11 @@ export const AllTasksPage = () => {
       .getProjects({ limit: 100 })
       .then((res) => setProjects(res.data.projects || []))
       .catch(() => {});
-    userService
-      .getUsers({ limit: 100, status: 'active' })
-      .then((res) => setUsers(res.data.users || []))
-      .catch(() => {});
-  }, []);
+    contactService
+      .getContacts({ status: 'all' })
+      .then((res) => setContacts(res.data.contacts || []))
+      .catch((err) => toast.error(err.message || 'Could not load contacts.'));
+  }, [toast]);
 
   useEffect(() => {
     fetchTasks();
@@ -263,7 +262,7 @@ export const AllTasksPage = () => {
     setStatusFilter('');
     setPriorityFilter('');
     setProjectFilter('');
-    setAssigneeFilter('');
+    setContactFilter('');
     setDueDateFrom('');
     setDueDateTo('');
     setGroupBy('none');
@@ -272,7 +271,7 @@ export const AllTasksPage = () => {
   };
 
   const hasActiveFilters = Boolean(
-    search || statusFilter || priorityFilter || projectFilter || assigneeFilter || dueDateFrom || dueDateTo || groupBy !== 'none'
+    search || statusFilter || priorityFilter || projectFilter || contactFilter || dueDateFrom || dueDateTo || groupBy !== 'none'
   );
 
   // Fast Kanban status transition with rollback
@@ -302,7 +301,7 @@ export const AllTasksPage = () => {
         status: statusFilter || undefined,
         priority: priorityFilter || undefined,
         project: projectFilter || undefined,
-        assignee: assigneeFilter || undefined,
+        contactId: contactFilter || undefined,
         dueDateFrom: dueDateFrom || undefined,
         dueDateTo: dueDateTo || undefined
       });
@@ -316,17 +315,16 @@ export const AllTasksPage = () => {
 
   // Form Reset & Open Handlers
   const resetForm = () => {
+    setCreationRequestId(globalThis.crypto.randomUUID());
     setFormTitle('');
     setFormDesc('');
     setFormProject(projects[0]?._id || '');
-    setFormAssignees([]);
-    setAssignee('');
+    setContactId('');
+    setContactSearch('');
     setFormStatus('To Do');
     setFormPriority('Medium');
     setFormStartDate('');
     setFormDueDate('');
-    setSendToWhatsApp(false);
-    setWhatsappTarget('');
     setFormError('');
   };
 
@@ -340,8 +338,8 @@ export const AllTasksPage = () => {
     setFormTitle(task.title);
     setFormDesc(task.description || '');
     setFormProject(task.project?._id || task.project);
-    setFormAssignees(task.assignees?.map((a) => a._id || a) || []);
-    setAssignee(task.assignees?.[0]?._id || task.assignees?.[0] || '');
+    setContactId(task.assignedContact?._id || task.assignedContact || '');
+    setContactSearch('');
     setFormStatus(task.status);
     setFormPriority(task.priority);
     setFormStartDate(task.startDate ? task.startDate.split('T')[0] : '');
@@ -358,8 +356,8 @@ export const AllTasksPage = () => {
       setFormError('Task title and target project are required.');
       return;
     }
-    if (sendToWhatsApp && !whatsappTarget.trim()) {
-      setFormError('Enter a WhatsApp number or group JID to send this task.');
+    if (!contactId || !contacts.some((contact) => contact._id === contactId && contact.isActive)) {
+      setFormError('Select an active contact before creating a task.');
       return;
     }
 
@@ -369,13 +367,12 @@ export const AllTasksPage = () => {
         title: formTitle.trim(),
         description: formDesc.trim(),
         project: formProject,
-        assignee: assignee || null,
+        contactId,
+        idempotencyKey: creationRequestId,
         status: formStatus,
         priority: formPriority,
         startDate: formStartDate || null,
-        dueDate: formDueDate || null,
-        sendToWhatsApp,
-        ...(sendToWhatsApp ? { whatsappTarget: whatsappTarget.trim() } : {})
+        dueDate: formDueDate || null
       });
 
       toast.success('Task created successfully.');
@@ -396,13 +393,31 @@ export const AllTasksPage = () => {
       setFormError('Task title is required.');
       return;
     }
+    const previousContactId = selectedTask?.assignedContact?._id || selectedTask?.assignedContact || '';
+    if (
+      !contactId ||
+      (!contacts.some((contact) => contact._id === contactId && contact.isActive) &&
+        contactId !== previousContactId)
+    ) {
+      setFormError('Select an active contact before saving this task.');
+      return;
+    }
+    const currentContactId = selectedTask?.assignedContact?._id || selectedTask?.assignedContact || '';
+    if (
+      !contactId ||
+      (!contacts.some((contact) => contact._id === contactId && contact.isActive) &&
+        contactId !== currentContactId)
+    ) {
+      setFormError('Select an active contact before saving this task.');
+      return;
+    }
 
     setSubmitting(true);
     try {
       await taskService.updateTask(selectedTask._id, {
         title: formTitle.trim(),
         description: formDesc.trim(),
-        assignees: formAssignees,
+        contactId: contactId || null,
         status: formStatus,
         priority: formPriority,
         startDate: formStartDate || null,
@@ -635,7 +650,7 @@ export const AllTasksPage = () => {
           <TaskBoard
             tasks={tasks}
             projects={projects}
-            users={users}
+            contacts={contacts}
             groupBy={groupBy}
             visibleCols={visibleCols}
             onToggleColumn={toggleColumn}
@@ -647,9 +662,9 @@ export const AllTasksPage = () => {
               setPage(1);
             }}
             selectedProjectId={projectFilter}
-            assigneeFilter={assigneeFilter}
-            onFilterAssignee={(assigneeId) => {
-              setAssigneeFilter(assigneeId);
+            contactFilter={contactFilter}
+            onFilterContact={(assignedContactId) => {
+              setContactFilter(assignedContactId);
               setPage(1);
             }}
             sortBy={sortBy}
@@ -704,7 +719,7 @@ export const AllTasksPage = () => {
                         {visibleCols.key && <th>Key</th>}
                         {visibleCols.title && <th>Title</th>}
                         {visibleCols.project && <th>Project</th>}
-                        {visibleCols.assignees && <th>Assignees</th>}
+                        {visibleCols.assignees && <th>Assigned To</th>}
                         {visibleCols.status && <th>Status</th>}
                         {visibleCols.priority && <th>Priority</th>}
                         {visibleCols.dueDate && <th>Due Date</th>}
@@ -762,7 +777,7 @@ export const AllTasksPage = () => {
                       </th>
                     )}
                     {visibleCols.project && <th>Project</th>}
-                    {visibleCols.assignees && <th>Assignees</th>}
+                    {visibleCols.assignees && <th>Assigned To</th>}
                     {visibleCols.status && (
                       <th
                         className="cursor-pointer"
@@ -922,21 +937,41 @@ export const AllTasksPage = () => {
             </select>
           </FormField>
 
-          <FormField label="Assignee">
+          <FormField label="Assign To" required>
+            <input
+              type="search"
+              className="input-field"
+              placeholder="Search contacts by name or number"
+              value={contactSearch}
+              onChange={(e) => setContactSearch(e.target.value)}
+              aria-label="Search contacts"
+            />
             <select
               className="input-field"
-              value={assignee}
-              onChange={(e) => setAssignee(e.target.value)}
+              value={contactId}
+              onChange={(e) => setContactId(e.target.value)}
+              required
             >
-              <option value="">Unassigned</option>
-              {users.map((teamMember) => (
-                <option key={teamMember._id} value={teamMember._id}>
-                  {teamMember.name} {teamMember.whatsappNumber
-                    ? `(${teamMember.whatsappNumber})`
-                    : '(No WhatsApp)'}
+              <option value="">Select a contact</option>
+              {contacts.filter((contact) =>
+                contact.isActive &&
+                `${contact.fullName} ${contact.whatsappNumber}`.toLowerCase().includes(contactSearch.toLowerCase())
+              ).map((contact) => (
+                <option key={contact._id} value={contact._id}>
+                  {contact.fullName} · {formatWhatsAppNumber(contact.whatsappNumber)}
                 </option>
               ))}
             </select>
+            <p className="text-xs text-gray-500">The assigned contact will receive a WhatsApp message after the task is saved.</p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsQuickContactOpen(true)}
+              className="mt-2"
+            >
+              + Add New Contact
+            </Button>
           </FormField>
 
           <FormField label="Description">
@@ -999,37 +1034,6 @@ export const AllTasksPage = () => {
             </FormField>
           </div>
 
-          <div className="mt-4 border-t pt-3">
-            <label className="flex items-center space-x-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={sendToWhatsApp}
-                onChange={(e) => setSendToWhatsApp(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span className="text-sm font-medium text-gray-700">
-                Send to WhatsApp (Group or Number)
-              </span>
-            </label>
-
-            {sendToWhatsApp && (
-              <div className="mt-2">
-                <input
-                  type="text"
-                  placeholder="e.g. 923001234567 or 120363049482690322@g.us"
-                  value={whatsappTarget}
-                  onChange={(e) => setWhatsappTarget(e.target.value)}
-                  className="w-full text-sm px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  aria-label="WhatsApp recipient"
-                  required
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  Enter an individual phone number (with country code) or a target group JID.
-                </p>
-              </div>
-            )}
-          </div>
-
           <div className="modal-actions-footer">
             <Button
               type="button"
@@ -1044,6 +1048,19 @@ export const AllTasksPage = () => {
           </div>
         </form>
       </Modal>}
+
+      <ContactFormModal
+        isOpen={isQuickContactOpen}
+        compact
+        onClose={() => setIsQuickContactOpen(false)}
+        onSaved={(contact) => {
+          setContacts((current) => [...current.filter((item) => item._id !== contact._id), contact]
+            .sort((a, b) => a.fullName.localeCompare(b.fullName)));
+          setContactId(contact._id);
+          setContactSearch('');
+          toast.success('Contact added and selected.');
+        }}
+      />
 
       {/* Edit Task Modal */}
       {canManage && <Modal
@@ -1071,6 +1088,36 @@ export const AllTasksPage = () => {
               value={formDesc}
               onChange={(e) => setFormDesc(e.target.value)}
             />
+          </FormField>
+
+          <FormField label="Assign To" required>
+            <input
+              type="search"
+              className="input-field"
+              placeholder="Search contacts by name or number"
+              value={contactSearch}
+              onChange={(e) => setContactSearch(e.target.value)}
+              aria-label="Search contacts"
+            />
+            <select
+              className="input-field"
+              value={contactId}
+              onChange={(e) => setContactId(e.target.value)}
+              required
+            >
+              <option value="">Select a contact</option>
+              {contacts.filter((contact) =>
+                (contact.isActive || contact._id === contactId) &&
+                `${contact.fullName} ${contact.whatsappNumber}`.toLowerCase().includes(contactSearch.toLowerCase())
+              ).map((contact) => (
+                <option key={contact._id} value={contact._id}>
+                  {contact.fullName} · {formatWhatsAppNumber(contact.whatsappNumber)}{contact.isActive ? '' : ' (Inactive)'}
+                </option>
+              ))}
+            </select>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setIsQuickContactOpen(true)}>
+              + Add New Contact
+            </Button>
           </FormField>
 
           <div className="form-grid-2">
@@ -1162,9 +1209,7 @@ const TaskRow = ({ task, visibleCols, onOpenDetails, onOpenEdit, canManage }) =>
         <td>{task.project?.name || '—'}</td>
       )}
       {visibleCols.assignees && (
-        <td>
-          <span className="text-slate-700 font-medium">Owner</span>
-        </td>
+        <td>{task.assignedContact?.fullName || 'Unassigned'}</td>
       )}
       {visibleCols.status && (
         <td><StatusBadge status={task.status} size="sm" /></td>

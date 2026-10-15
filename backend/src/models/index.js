@@ -11,6 +11,8 @@ import {
   EMAIL_DELIVERY_STATUSES
 } from './notification.model.js';
 import { NotificationOutbox, OUTBOX_STATUSES } from './notificationOutbox.model.js';
+import { Contact } from './contact.model.js';
+import { TaskWhatsAppNotification, TASK_WHATSAPP_STATUSES } from './taskWhatsAppNotification.model.js';
 
 export const MODEL_NAMES = {
   USER: 'User',
@@ -21,6 +23,8 @@ export const MODEL_NAMES = {
   COMMENT: 'Comment',
   NOTIFICATION: 'Notification',
   NOTIFICATION_OUTBOX: 'NotificationOutbox',
+  CONTACT: 'Contact',
+  TASK_WHATSAPP_NOTIFICATION: 'TaskWhatsAppNotification',
   INTEGRATION_MESSAGE: 'IntegrationMessage'
 };
 
@@ -42,7 +46,10 @@ export {
   NOTIFICATION_CHANNELS,
   EMAIL_DELIVERY_STATUSES,
   NotificationOutbox,
-  OUTBOX_STATUSES
+  OUTBOX_STATUSES,
+  Contact,
+  TaskWhatsAppNotification,
+  TASK_WHATSAPP_STATUSES
 };
 
 export default {
@@ -64,5 +71,8 @@ export default {
   NOTIFICATION_CHANNELS,
   EMAIL_DELIVERY_STATUSES,
   OUTBOX_STATUSES,
+  Contact,
+  TaskWhatsAppNotification,
+  TASK_WHATSAPP_STATUSES,
   MODEL_NAMES
 };

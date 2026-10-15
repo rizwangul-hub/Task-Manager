@@ -1,11 +1,12 @@
 import { Task, TASK_STATUSES, TASK_PRIORITIES } from '../models/task.model.js';
+import mongoose from 'mongoose';
+import { Contact } from '../models/contact.model.js';
 import { Project } from '../models/project.model.js';
 import { User, USER_ROLES } from '../models/user.model.js';
 import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { notificationService } from '../services/notification.service.js';
 import { socketService } from '../services/socket.service.js';
-import { sendWhatsAppTaskNotification } from '../services/whatsappService.js';
-import { env } from '../config/env.js';
+import { taskAssignmentNotificationService } from '../services/taskAssignmentNotification.service.js';
 import { buildCsvString } from '../utils/csv.js';
 import { AppError } from '../middleware/errorHandler.js';
 
@@ -47,6 +48,12 @@ export const taskController = {
         } else {
           query.assignees = req.query.assignee;
         }
+      }
+      if (req.query.contactId) {
+        if (!mongoose.isValidObjectId(req.query.contactId)) {
+          return next(new AppError('Invalid contact filter.', 400));
+        }
+        query.assignedContact = req.query.contactId;
       }
 
       // Search by title or taskKey or description
@@ -137,6 +144,7 @@ export const taskController = {
           .populate('project', 'name projectKey status')
           .populate('creator', 'name email')
           .populate('assignees', 'name email role')
+          .populate('assignedContact', 'fullName whatsappNumber isActive')
           .sort(sort)
           .skip(skip)
           .limit(limit),
@@ -169,7 +177,8 @@ export const taskController = {
       const task = await Task.findById(req.params.id)
         .populate('project', 'name projectKey status manager members')
         .populate('creator', 'name email')
-        .populate('assignees', 'name email role');
+        .populate('assignees', 'name email role')
+        .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
 
       if (!task) {
         return next(new AppError('Task not found.', 404));
@@ -187,9 +196,63 @@ export const taskController = {
         }
       }
 
+      const whatsappNotifications = await taskAssignmentNotificationService.getForTask(task._id);
       res.status(200).json({
         status: 'success',
-        data: { task: task.toJSON() }
+        data: {
+          task: {
+            ...task.toJSON(),
+            whatsappNotifications: whatsappNotifications.map((entry) => entry.toJSON())
+          }
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getWhatsAppNotifications: async (req, res, next) => {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return next(new AppError('Invalid task ID.', 400));
+    }
+    try {
+      const task = await Task.findById(req.params.id)
+        .populate('project', 'manager members')
+        .select('_id assignees');
+      if (!task) return next(new AppError('Task not found.', 404));
+      if (req.user.role === USER_ROLES.MEMBER) {
+        const isAssignee = task.assignees.some((id) => id.toString() === req.user._id.toString());
+        const isProjectMember = task.project?.members?.some((id) => id.toString() === req.user._id.toString()) ||
+          task.project?.manager?.toString() === req.user._id.toString();
+        if (!isAssignee && !isProjectMember) {
+          return next(new AppError('Access denied: You are not authorized to view this task.', 403));
+        }
+      }
+      const notifications = await taskAssignmentNotificationService.getForTask(task._id);
+      res.status(200).json({
+        status: 'success',
+        data: { notifications: notifications.map((item) => item.toJSON()) }
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  retryWhatsAppNotification: async (req, res, next) => {
+    if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(req.params.notificationId)) {
+      return next(new AppError('Invalid task or notification ID.', 400));
+    }
+    try {
+      const task = await Task.findById(req.params.id);
+      if (!task) return next(new AppError('Task not found.', 404));
+      const notification = await taskAssignmentNotificationService.retry(task._id, req.params.notificationId);
+      if (!notification) {
+        return next(new AppError('A failed notification was not found for this task.', 404));
+      }
+      res.status(202).json({
+        status: 'success',
+        message: 'WhatsApp notification retry queued.',
+        data: { notification: notification.toJSON() }
       });
     } catch (error) {
       next(error);
@@ -205,6 +268,8 @@ export const taskController = {
       title,
       description,
       project: projectId,
+      contactId,
+      idempotencyKey,
       assignee,
       assignees,
       status,
@@ -216,11 +281,53 @@ export const taskController = {
     if (!title || !projectId) {
       return next(new AppError('Task title and project reference are required.', 400));
     }
+    if (idempotencyKey !== undefined &&
+        (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
+      return next(new AppError('Task creation request key is invalid.', 400));
+    }
 
     try {
+      if (idempotencyKey) {
+        const existing = await Task.findOne({
+          creator: req.user._id,
+          creationRequestId: idempotencyKey
+        })
+          .populate('project', 'name projectKey manager members')
+          .populate('creator', 'name email')
+          .populate('assignees', 'name email role')
+          .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
+        if (existing) {
+          const notifications = await taskAssignmentNotificationService.getForTask(existing._id);
+          if (existing.assignedContact) {
+            await taskAssignmentNotificationService.enqueue(existing, existing.assignedContact);
+          }
+          return res.status(200).json({
+            status: 'success',
+            message: 'Task creation request was already processed.',
+            data: {
+              task: {
+                ...existing.toJSON(),
+                whatsappNotifications: notifications.map((entry) => entry.toJSON())
+              }
+            }
+          });
+        }
+      }
+
       const project = await Project.findById(projectId);
       if (!project || project.isArchived) {
         return next(new AppError('Target project does not exist or has been archived.', 404));
+      }
+
+      let assignedContact = null;
+      if (contactId) {
+        if (!mongoose.isValidObjectId(contactId)) {
+          return next(new AppError('Invalid contact selection.', 400));
+        }
+        assignedContact = await Contact.findOne({ _id: contactId, isActive: true });
+        if (!assignedContact) {
+          return next(new AppError('Select an active contact before assigning this task.', 400));
+        }
       }
 
       // Managers may assign any active workspace user; assignment grants board visibility.
@@ -263,7 +370,11 @@ export const taskController = {
         project: project._id,
         taskKey,
         creator: req.user._id,
+        ...(idempotencyKey ? { creationRequestId: idempotencyKey } : {}),
         assignees: validatedAssigneeIds,
+        assignedContact: assignedContact?._id || null,
+        contactAssignmentId: assignedContact ? new mongoose.Types.ObjectId() : null,
+        contactAssignedAt: assignedContact ? new Date() : null,
         status: initialStatus,
         priority: priority && Object.values(TASK_PRIORITIES).includes(priority) ? priority : TASK_PRIORITIES.MEDIUM,
         startDate: startDate ? new Date(startDate) : null,
@@ -288,7 +399,8 @@ export const taskController = {
       const populated = await Task.findById(task._id)
         .populate('project', 'name projectKey manager members')
         .populate('creator', 'name email')
-        .populate('assignees', 'name email role phone whatsappNumber');
+        .populate('assignees', 'name email role phone whatsappNumber')
+        .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
 
       const taskPayload = populated.toJSON();
       const getUserId = (userRef) => userRef?._id?.toString() || userRef?.toString();
@@ -315,61 +427,11 @@ export const taskController = {
         );
       }
 
-      const dueDateText = populated.dueDate
-        ? new Date(populated.dueDate).toLocaleDateString()
-        : 'Not set';
-      const whatsAppTaskMessage = [
-        `📌 *New Deliverable Assigned: ${populated.title}*`,
-        `*Board / Project:* ${populated.project?.name || 'Project'}`,
-        `*Priority:* ${populated.priority}`,
-        `*Due Date:* ${dueDateText === 'Not set' ? 'No deadline' : dueDateText}`,
-        populated.description ? `*Description / Acceptance Criteria:*\n${populated.description}` : null,
-        '_PixxTechnologiees Task Manager_'
-      ].filter(Boolean).join('\n\n');
-
-      const hasWhatsAppPreference = Object.prototype.hasOwnProperty.call(req.body, 'sendToWhatsApp');
-      const targetJid = hasWhatsAppPreference
-        ? (
-          req.body.sendToWhatsApp === true && typeof req.body.whatsappTarget === 'string'
-            ? req.body.whatsappTarget.trim()
-            : null
-        )
-        : (
-          req.body.whatsappTarget ||
-          req.body.targetJid ||
-          env.WHATSAPP.taskNotificationJid ||
-          process.env.WHATSAPP_NOTIFICATION_TARGET ||
-          process.env.WHATSAPP_OUTBOUND_JID ||
-          (process.env.PIXX_WHATSAPP_GROUP_ID && process.env.PIXX_WHATSAPP_GROUP_ID !== 'all' ? process.env.PIXX_WHATSAPP_GROUP_ID : null) ||
-          (process.env.WHATSAPP_GROUP_ID && process.env.WHATSAPP_GROUP_ID !== 'all' ? process.env.WHATSAPP_GROUP_ID : null)
-        );
-
-      const whatsappTargets = new Set();
-      if (targetJid) whatsappTargets.add(targetJid);
-      for (const taskAssignee of populated.assignees || []) {
-        const assigneeWhatsAppNumber = taskAssignee.whatsappNumber || taskAssignee.phone;
-        if (assigneeWhatsAppNumber?.trim()) {
-          whatsappTargets.add(assigneeWhatsAppNumber.trim());
-        }
-      }
-      for (const target of whatsappTargets) {
-        const assigneeName = (populated.assignees || []).find((taskAssignee) =>
-          (taskAssignee.whatsappNumber || taskAssignee.phone || '').trim() === target
-        )?.name;
+      if (assignedContact) {
         console.info(
-          `[TASK_ASSIGNMENT] Assignee ${assigneeName || 'recipient'} selected with number ${target}`
+          `[TASK_ASSIGNMENT] Contact ${assignedContact.fullName} selected with number ${assignedContact.whatsappNumber}`
         );
-        void sendWhatsAppTaskNotification(target, whatsAppTaskMessage, { taskTitle: populated.title })
-          .then(async (result) => {
-            if (!result.success) return;
-            await Task.updateOne(
-              { _id: task._id },
-              { $set: { whatsappNotificationSent: true } }
-            );
-          })
-          .catch((error) => {
-            console.error(`[WA_OUTBOUND_ERROR] Failed to record task ${task.taskKey} notification status:`, error);
-          });
+        await taskAssignmentNotificationService.enqueue(populated, assignedContact);
       }
 
       res.status(201).json({
@@ -378,6 +440,36 @@ export const taskController = {
         data: { task: populated.toJSON() }
       });
     } catch (error) {
+      if (error.code === 11000 && idempotencyKey) {
+        try {
+          const existing = await Task.findOne({
+            creator: req.user._id,
+            creationRequestId: idempotencyKey
+          })
+            .populate('project', 'name projectKey manager members')
+            .populate('creator', 'name email')
+            .populate('assignees', 'name email role')
+            .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
+          if (existing) {
+            const notifications = await taskAssignmentNotificationService.getForTask(existing._id);
+            if (existing.assignedContact) {
+              await taskAssignmentNotificationService.enqueue(existing, existing.assignedContact);
+            }
+            return res.status(200).json({
+              status: 'success',
+              message: 'Task creation request was already processed.',
+              data: {
+                task: {
+                  ...existing.toJSON(),
+                  whatsappNotifications: notifications.map((entry) => entry.toJSON())
+                }
+              }
+            });
+          }
+        } catch (lookupError) {
+          return next(lookupError);
+        }
+      }
       next(error);
     }
   },
@@ -388,7 +480,17 @@ export const taskController = {
    */
   updateTask: async (req, res, next) => {
     const { id } = req.params;
-    const { title, description, assignees, status, priority, startDate, dueDate, customFields } = req.body;
+    const {
+      title,
+      description,
+      assignees,
+      contactId,
+      status,
+      priority,
+      startDate,
+      dueDate,
+      customFields
+    } = req.body;
 
     try {
       const task = await Task.findById(id).populate('project');
@@ -407,6 +509,7 @@ export const taskController = {
       const prevStartDate = task.startDate ? task.startDate.toISOString().split('T')[0] : null;
       const prevDueDate = task.dueDate ? task.dueDate.toISOString().split('T')[0] : null;
       const prevAssignees = (task.assignees || []).map((a) => a.toString());
+      const prevContactId = task.assignedContact?.toString() || '';
 
       if (!canManageTask) {
         const allowedFields = new Set(['status', 'startDate', 'dueDate', 'customFields']);
@@ -506,6 +609,8 @@ export const taskController = {
       }
 
       // Managers and admins have full task-edit permissions.
+      let contactAssignmentChanged = false;
+      let newAssignedContact = null;
       if (title) task.title = title.trim();
       if (description !== undefined) task.description = description.trim();
       if (customFields !== undefined) {
@@ -554,6 +659,26 @@ export const taskController = {
         }
         task.assignees = validated;
         await project.save();
+      }
+
+      if (contactId !== undefined) {
+        const nextContactId = contactId || '';
+        if (nextContactId !== prevContactId) {
+          if (nextContactId) {
+            if (!mongoose.isValidObjectId(nextContactId)) {
+              return next(new AppError('Invalid contact selection.', 400));
+            }
+            newAssignedContact = await Contact.findOne({ _id: nextContactId, isActive: true });
+            if (!newAssignedContact) {
+              return next(new AppError('Select an active contact before assigning this task.', 400));
+            }
+          }
+          task.assignedContact = newAssignedContact?._id || null;
+          task.contactAssignmentId = newAssignedContact ? new mongoose.Types.ObjectId() : null;
+          task.contactAssignedAt = newAssignedContact ? new Date() : null;
+          task.whatsappNotificationSent = false;
+          contactAssignmentChanged = true;
+        }
       }
 
       await task.save();
@@ -605,6 +730,19 @@ export const taskController = {
             details: { previousAssignees: prevAssignees, newAssignees }
           });
         }
+
+        if (contactAssignmentChanged) {
+          await TaskEvent.logEvent({
+            task: task._id,
+            project: task.project._id || task.project,
+            user: req.user._id,
+            action: TASK_EVENT_ACTIONS.ASSIGNMENT_CHANGED,
+            details: {
+              previousContactId: prevContactId || null,
+              assignedContactId: task.assignedContact || null
+            }
+          });
+        }
       }
 
       await TaskEvent.logEvent({
@@ -618,7 +756,15 @@ export const taskController = {
       const populated = await Task.findById(task._id)
         .populate('project', 'name projectKey manager')
         .populate('creator', 'name email')
-        .populate('assignees', 'name email role');
+        .populate('assignees', 'name email role')
+        .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
+
+      if (contactAssignmentChanged && populated.assignedContact) {
+        console.info(
+          `[TASK_ASSIGNMENT] Contact ${populated.assignedContact.fullName} selected with number ${populated.assignedContact.whatsappNumber}`
+        );
+        await taskAssignmentNotificationService.enqueue(populated, populated.assignedContact);
+      }
 
       // Dispatch relevant notification triggers
       if (status && task.status !== prevStatus) {
@@ -877,6 +1023,12 @@ export const taskController = {
 
       if (req.query.assignee) {
         query.assignees = req.query.assignee === 'me' ? req.user._id : req.query.assignee;
+      }
+      if (req.query.contactId) {
+        if (!mongoose.isValidObjectId(req.query.contactId)) {
+          return next(new AppError('Invalid contact filter.', 400));
+        }
+        query.assignedContact = req.query.contactId;
       }
 
       if (req.query.search) {

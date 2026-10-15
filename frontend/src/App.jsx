@@ -16,6 +16,7 @@ import ReportsPage from './pages/ReportsPage';
 import NotificationsPage from './pages/NotificationsPage';
 import SettingsPage from './pages/SettingsPage';
 import NotFoundPage from './pages/NotFoundPage';
+import ContactsPage from './pages/ContactsPage';
 import { Navigate } from 'react-router-dom';
 
 function App() {
@@ -42,6 +43,7 @@ function App() {
                 <Route path="my-work" element={<MyWorkPage />} />
                 <Route path="all-tasks" element={<AllTasksPage />} />
                 <Route path="projects" element={<ProjectsPage />} />
+                <Route path="contacts" element={<ContactsPage />} />
                 <Route path="calendar" element={<CalendarPage />} />
                 <Route path="team" element={<Navigate to="/all-tasks" replace />} />
                 <Route path="reports" element={<ReportsPage />} />

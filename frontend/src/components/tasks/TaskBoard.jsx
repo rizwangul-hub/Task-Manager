@@ -13,7 +13,7 @@ import {
   MessageSquare,
   Plus,
   Search,
-  Users,
+  ContactRound,
   X
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
@@ -39,7 +39,7 @@ const getInitials = (name = '') =>
 const TaskBoard = ({
   tasks,
   projects,
-  users,
+  contacts,
   groupBy,
   visibleCols,
   onToggleColumn,
@@ -48,8 +48,8 @@ const TaskBoard = ({
   onQuickCreate,
   onSelectProject,
   selectedProjectId,
-  assigneeFilter,
-  onFilterAssignee,
+  contactFilter,
+  onFilterContact,
   sortBy,
   sortOrder,
   onChangeSort
@@ -58,7 +58,7 @@ const TaskBoard = ({
   const canManage = canManageBoard();
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [openPopover, setOpenPopover] = useState(null);
-  const [assigneeSearch, setAssigneeSearch] = useState('');
+  const [contactSearch, setContactSearch] = useState('');
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [quickCreateGroup, setQuickCreateGroup] = useState(null);
@@ -132,7 +132,7 @@ const TaskBoard = ({
   };
 
   const addableColumns = [
-    ['assignees', 'People', Users],
+    ['assignees', 'Assigned To', ContactRound],
     ['status', 'Status', Check],
     ['dueDate', 'Date', CalendarDays],
     ['priority', 'Priority', Layers],
@@ -207,10 +207,12 @@ const TaskBoard = ({
           </div>
           <div className="board-toolbar-actions">
             <label className="board-person-filter">
-              <Users size={15} />
-              <select aria-label="Filter board by assignee" value={assigneeFilter} onChange={(event) => onFilterAssignee(event.target.value)}>
-                <option value="">People</option>
-                {users.map((user) => <option value={user._id} key={user._id}>{user.name}</option>)}
+              <ContactRound size={15} />
+              <select aria-label="Filter board by contact" value={contactFilter} onChange={(event) => onFilterContact(event.target.value)}>
+                <option value="">All contacts</option>
+                {contacts.filter((contact) => contact.isActive).map((contact) => (
+                  <option value={contact._id} key={contact._id}>{contact.fullName}</option>
+                ))}
               </select>
             </label>
             <button type="button" className="board-tool-button" onClick={() => setColumnsOpen((open) => !open)}>
@@ -301,7 +303,7 @@ const TaskBoard = ({
                             setSelectedTaskIds((selected) => allSelected ? selected.filter((id) => !ids.includes(id)) : [...new Set([...selected, ...ids])]);
                           }} /></th>
                           <th className="board-task-column">Task</th>
-                          {visibleCols.assignees && <th>People</th>}
+                          {visibleCols.assignees && <th>Assigned To</th>}
                           {visibleCols.status && <th>Status</th>}
                           {visibleCols.priority && <th>Priority</th>}
                           {visibleCols.dueDate && <th>Date</th>}
@@ -317,7 +319,7 @@ const TaskBoard = ({
                       <tbody>
                         {groupTasks.map((task) => {
                           const status = STATUS_OPTIONS.find((option) => option.value === task.status) || STATUS_OPTIONS[0];
-                          const assignees = Array.isArray(task.assignees) ? task.assignees : [];
+                          const assignedContact = task.assignedContact;
                           const popoverId = openPopover?.taskId === task._id ? openPopover.type : null;
                           return (
                             <tr key={task._id} className={selectedTaskIds.includes(task._id) ? 'is-selected' : ''}>
@@ -363,26 +365,28 @@ const TaskBoard = ({
                                 <td className="board-cell-popover">
                                   <button type="button" className="board-assignee-trigger" aria-label={`Assign people to ${task.title}`} disabled={!canManage} onClick={() => {
                                     setOpenPopover(popoverId === 'assignees' ? null : { taskId: task._id, type: 'assignees' });
-                                    setAssigneeSearch('');
+                                    setContactSearch('');
                                   }}>
-                                    {assignees.length ? assignees.slice(0, 3).map((assignee) => (
-                                      <span className="board-avatar" title={assignee.name} key={getId(assignee)}>{getInitials(assignee.name)}</span>
-                                    )) : <span className="board-avatar board-avatar-empty"><Plus size={14} /></span>}
+                                    {assignedContact
+                                      ? <span className="board-avatar" title={assignedContact.fullName}>{getInitials(assignedContact.fullName)}</span>
+                                      : <span className="board-avatar board-avatar-empty"><Plus size={14} /></span>}
                                   </button>
                                   {popoverId === 'assignees' && (
                                     <div className="board-popover board-assignee-popover">
-                                      <div className="board-popover-title">Assign people</div>
-                                      <div className="board-assignee-search"><Search size={14} /><input autoFocus placeholder="Search team" value={assigneeSearch} onChange={(event) => setAssigneeSearch(event.target.value)} /></div>
-                                      <p>Assignees will be notified via email and system.</p>
+                                      <div className="board-popover-title">Assign contact</div>
+                                      <div className="board-assignee-search"><Search size={14} /><input autoFocus placeholder="Search contacts" value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} /></div>
+                                      <p>The contact will receive a WhatsApp assignment notification.</p>
                                       <div className="board-assignee-list">
-                                        {users.filter((user) => user.name?.toLowerCase().includes(assigneeSearch.toLowerCase()) || user.email?.toLowerCase().includes(assigneeSearch.toLowerCase())).map((user) => {
-                                          const userId = getId(user);
-                                          const selected = assignees.some((assignee) => getId(assignee) === userId);
-                                          return <button type="button" key={userId} onClick={() => {
-                                            const next = selected ? assignees.filter((assignee) => getId(assignee) !== userId).map(getId) : [...assignees.map(getId), userId];
-                                            void onUpdateTask(task, { assignees: next });
-                                          }}><span className="board-avatar">{getInitials(user.name)}</span><span>{user.name}</span>{selected && <Check size={15} />}</button>;
+                                        {contacts.filter((contact) => contact.isActive &&
+                                          `${contact.fullName} ${contact.whatsappNumber}`.toLowerCase().includes(contactSearch.toLowerCase())
+                                        ).map((contact) => {
+                                          const selected = getId(assignedContact) === getId(contact);
+                                          return <button type="button" key={contact._id} onClick={() => {
+                                            setOpenPopover(null);
+                                            if (!selected) void onUpdateTask(task, { contactId: contact._id });
+                                          }}><span className="board-avatar">{getInitials(contact.fullName)}</span><span>{contact.fullName} · {contact.whatsappNumber}</span>{selected && <Check size={15} />}</button>;
                                         })}
+                                        {contacts.every((contact) => !contact.isActive) && <p>No active contacts. Add one from Contacts.</p>}
                                       </div>
                                     </div>
                                   )}

@@ -24,6 +24,12 @@ router.get('/export/csv', taskController.exportTasksCsv);
 
 // Get single task
 router.get('/:id', taskController.getTaskById);
+router.get('/:id/whatsapp-notifications', taskController.getWhatsAppNotifications);
+router.post(
+  '/:id/whatsapp-notifications/:notificationId/retry',
+  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
+  taskController.retryWhatsAppNotification
+);
 
 // Update task details
 router.put('/:id', taskController.updateTask);

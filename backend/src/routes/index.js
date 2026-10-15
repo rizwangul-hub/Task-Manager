@@ -8,6 +8,7 @@ import notificationRoutes from './notification.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
 import reportRoutes from './report.routes.js';
 import whatsappWebhookRoutes from './whatsappWebhook.routes.js';
+import contactRoutes from './contact.routes.js';
 
 const router = Router();
 
@@ -19,6 +20,7 @@ router.use('/webhook/whatsapp', whatsappWebhookRoutes);
 router.use('/webhooks/whatsapp', whatsappWebhookRoutes);
 router.use('/auth', authRoutes);
 router.use('/users', userRoutes);
+router.use('/contacts', contactRoutes);
 router.use('/projects', projectRoutes);
 router.use('/tasks', taskRoutes);
 router.use('/notifications', notificationRoutes);
@@ -35,6 +37,7 @@ router.get('/', (req, res) => {
       health: '/api/health',
       auth: '/api/auth',
       users: '/api/users',
+      contacts: '/api/contacts',
       projects: '/api/projects',
       tasks: '/api/tasks',
       notifications: '/api/notifications',

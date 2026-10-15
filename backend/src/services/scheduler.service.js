@@ -7,9 +7,11 @@ import { emailService } from './email.service.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { processWhatsAppQueue } from '../controllers/whatsappWebhook.controller.js';
+import { taskAssignmentNotificationService } from './taskAssignmentNotification.service.js';
 
 let cronTask = null;
 let whatsappQueueTimer = null;
+let taskWhatsAppOutboxTimer = null;
 
 export async function checkDeadlinesAndOverdue() {
   const now = new Date();
@@ -306,6 +308,17 @@ export const schedulerService = {
       logger.info('[WHATSAPP_QUEUE] Persistent intake worker started.');
     }
 
+    if (!taskWhatsAppOutboxTimer) {
+      const processTaskWhatsAppOutbox = () => {
+        void taskAssignmentNotificationService.processPending().catch((error) => {
+          logger.error('[WA_OUTBOX] Pending assignment notification processing failed:', error);
+        });
+      };
+      processTaskWhatsAppOutbox();
+      taskWhatsAppOutboxTimer = setInterval(processTaskWhatsAppOutbox, 30 * 1000);
+      taskWhatsAppOutboxTimer.unref?.();
+    }
+
     if (!env.SCHEDULER.enabled) {
       logger.info('[SCHEDULER] Background worker disabled via ENABLE_SCHEDULER=false.');
       return;
@@ -343,6 +356,10 @@ export const schedulerService = {
     if (whatsappQueueTimer) {
       clearInterval(whatsappQueueTimer);
       whatsappQueueTimer = null;
+    }
+    if (taskWhatsAppOutboxTimer) {
+      clearInterval(taskWhatsAppOutboxTimer);
+      taskWhatsAppOutboxTimer = null;
     }
     if (cronTask) {
       cronTask.stop();
