@@ -5,22 +5,37 @@ import FormField from '../components/ui/FormField';
 import Button from '../components/ui/Button';
 import StatusBadge from '../components/ui/StatusBadge';
 import { notificationService } from '../services/notificationService';
+import { userService } from '../services/userService';
+import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import {
   Settings,
   Save,
   Server,
   Bell,
-  Mail
+  Mail,
+  User as UserIcon,
+  Phone
 } from 'lucide-react';
 
 export const SettingsPage = () => {
   const { apiStatus } = useOutletContext() || {};
+  const { user, checkSession } = useAuth();
   const { toast } = useToast();
 
   const [companyName, setCompanyName] = useState('PixxTechnologiees');
   const [workspaceDomain, setWorkspaceDomain] = useState('internal.pixxtechnologiees.com');
   const [timezone, setTimezone] = useState('UTC');
+
+  // User Profile & WhatsApp state
+  const [profileWhatsAppNumber, setProfileWhatsAppNumber] = useState(user?.whatsappNumber || '');
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    if (user?.whatsappNumber !== undefined) {
+      setProfileWhatsAppNumber(user.whatsappNumber || '');
+    }
+  }, [user]);
 
   // Notification Preferences State
   const [loadingPrefs, setLoadingPrefs] = useState(true);
@@ -81,13 +96,74 @@ export const SettingsPage = () => {
     }
   };
 
+  const handleSaveProfileWhatsApp = async (e) => {
+    e.preventDefault();
+    if (!user?._id) return;
+    setSavingProfile(true);
+    try {
+      await userService.updateUser(user._id, {
+        whatsappNumber: profileWhatsAppNumber.trim() || null
+      });
+      if (checkSession) await checkSession();
+      toast.success('Your WhatsApp notification number has been saved.');
+    } catch (err) {
+      toast.error(err.message || 'Could not save your WhatsApp number.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   return (
     <PageContainer
       title="System Settings"
-      subtitle="Workspace configuration, notification channels, API diagnostics, and operational defaults."
+      subtitle="Workspace configuration, notification channels, user profile, and operational defaults."
       badge={<StatusBadge status="active" label="Settings Active" />}
     >
       <div className="settings-page-grid">
+        {/* User Profile & WhatsApp Settings Card */}
+        <div className="settings-card">
+          <div className="card-header">
+            <div className="card-header-title">
+              <UserIcon size={18} className="card-title-icon" />
+              <h3>User Profile & WhatsApp Alerts</h3>
+            </div>
+            <span className="card-tag">Profile</span>
+          </div>
+
+          <form onSubmit={handleSaveProfileWhatsApp} className="settings-form">
+            <div className="profile-user-summary" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div style={{ fontWeight: 600 }}>{user?.name || 'Workspace User'}</div>
+              <div style={{ color: '#6b7280', fontSize: '0.875rem' }}>({user?.email})</div>
+              {profileWhatsAppNumber.trim() ? (
+                <StatusBadge status="active" label="WhatsApp Linked" />
+              ) : (
+                <StatusBadge status="pending" label="No WhatsApp" />
+              )}
+            </div>
+
+            <FormField
+              id="settings-whatsapp-number"
+              label="WhatsApp Phone Number (with Country Code)"
+              type="tel"
+              placeholder="e.g. 923179500901 or 447123456789"
+              value={profileWhatsAppNumber}
+              onChange={(e) => setProfileWhatsAppNumber(e.target.value)}
+              helperText="e.g. 923179500901 or 447123456789 (Used for automated task assignment alerts)"
+            />
+
+            <div className="form-actions" style={{ marginTop: '1rem' }}>
+              <Button
+                type="submit"
+                variant="primary"
+                icon={Phone}
+                isLoading={savingProfile}
+              >
+                Save WhatsApp Number
+              </Button>
+            </div>
+          </form>
+        </div>
+
         {/* Notification Preferences Card */}
         <div className="settings-card">
           <div className="card-header">

@@ -144,7 +144,7 @@ export const taskController = {
         Task.find(query)
           .populate('project', 'name projectKey status')
           .populate('creator', 'name email')
-          .populate('assignees', 'name email role')
+          .populate('assignees', 'name email role phone whatsappNumber')
           .populate('assignedContact', 'fullName whatsappNumber isActive')
           .sort(sort)
           .skip(skip)
@@ -178,7 +178,7 @@ export const taskController = {
       const task = await Task.findById(req.params.id)
         .populate('project', 'name projectKey status manager members')
         .populate('creator', 'name email')
-        .populate('assignees', 'name email role')
+        .populate('assignees', 'name email role phone whatsappNumber')
         .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
 
       if (!task) {
@@ -426,6 +426,43 @@ export const taskController = {
           req.user,
           populated.assignees.map((a) => a._id || a)
         );
+
+        // Outbound WhatsApp Dispatch for assigned workspace users
+        for (const member of populated.assignees) {
+          const rawPhone = member.whatsappNumber || member.phone;
+          if (rawPhone && typeof rawPhone === 'string' && rawPhone.trim()) {
+            console.info(
+              `[TASK_ASSIGNMENT] Assignee ${member.name} selected with number ${rawPhone}`
+            );
+            const dueDateFormatted = populated.dueDate
+              ? new Date(populated.dueDate).toLocaleDateString('en-GB', {
+                  day: 'numeric',
+                  month: 'short',
+                  year: 'numeric'
+                })
+              : 'No deadline';
+            const messageCard = [
+              `📌 *New Deliverable Assigned: ${populated.title}*`,
+              `*Board / Project*: ${populated.project?.name || populated.project?.title || 'Project'}`,
+              `*Priority*: ${populated.priority}`,
+              `*Due Date*: ${dueDateFormatted}`,
+              populated.description ? `*Description*: ${populated.description}` : '',
+              '',
+              `_PixxTechnologiees Task Manager_`
+            ].filter(Boolean).join('\n');
+
+            // Fire-and-forget promise pattern so HTTP response is never blocked or delayed
+            sendWhatsAppTaskNotification(rawPhone, messageCard, { taskTitle: populated.title })
+              .then(async (result) => {
+                if (result?.success) {
+                  await Task.updateOne({ _id: task._id }, { $set: { whatsappNotificationSent: true } });
+                }
+              })
+              .catch((err) => {
+                console.error(`[WA_OUTBOUND_ERROR] Failed async send to ${member.name}:`, err?.message || err);
+              });
+          }
+        }
       }
 
       if (assignedContact) {

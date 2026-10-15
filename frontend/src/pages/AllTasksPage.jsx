@@ -17,6 +17,7 @@ import { taskService } from '../services/taskService';
 import { socketService } from '../services/socket';
 import { projectService } from '../services/projectService';
 import { contactService } from '../services/contactService';
+import { userService } from '../services/userService';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../hooks/useAuth';
 import { isTaskOverdue, formatDate } from '../utils/date';
@@ -98,6 +99,7 @@ export const AllTasksPage = () => {
 
   // Metadata
   const [projects, setProjects] = useState([]);
+  const [users, setUsers] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [contactSearch, setContactSearch] = useState('');
   const [isQuickContactOpen, setIsQuickContactOpen] = useState(false);
@@ -117,6 +119,7 @@ export const AllTasksPage = () => {
   const [creationRequestId, setCreationRequestId] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formProject, setFormProject] = useState('');
+  const [assignee, setAssignee] = useState('');
   const [contactId, setContactId] = useState('');
   const [formStatus, setFormStatus] = useState('To Do');
   const [formPriority, setFormPriority] = useState('Medium');
@@ -209,6 +212,10 @@ export const AllTasksPage = () => {
       .getContacts({ status: 'all' })
       .then((res) => setContacts(res.data.contacts || []))
       .catch((err) => toast.error(err.message || 'Could not load contacts.'));
+    userService
+      .getUsers({ status: 'active' })
+      .then((res) => setUsers(res.data.users || []))
+      .catch(() => {});
   }, [toast]);
 
   useEffect(() => {
@@ -319,6 +326,7 @@ export const AllTasksPage = () => {
     setFormTitle('');
     setFormDesc('');
     setFormProject(projects[0]?._id || '');
+    setAssignee('');
     setContactId('');
     setContactSearch('');
     setFormStatus('To Do');
@@ -338,6 +346,8 @@ export const AllTasksPage = () => {
     setFormTitle(task.title);
     setFormDesc(task.description || '');
     setFormProject(task.project?._id || task.project);
+    const existingAssignee = task.assignees?.[0]?._id || task.assignees?.[0] || task.assignee?._id || task.assignee || '';
+    setAssignee(existingAssignee);
     setContactId(task.assignedContact?._id || task.assignedContact || '');
     setContactSearch('');
     setFormStatus(task.status);
@@ -356,10 +366,6 @@ export const AllTasksPage = () => {
       setFormError('Task title and target project are required.');
       return;
     }
-    if (!contactId || !contacts.some((contact) => contact._id === contactId && contact.isActive)) {
-      setFormError('Select an active contact before creating a task.');
-      return;
-    }
 
     setSubmitting(true);
     try {
@@ -367,7 +373,8 @@ export const AllTasksPage = () => {
         title: formTitle.trim(),
         description: formDesc.trim(),
         project: formProject,
-        contactId,
+        assignee: assignee || null,
+        contactId: contactId || null,
         idempotencyKey: creationRequestId,
         status: formStatus,
         priority: formPriority,
@@ -377,6 +384,7 @@ export const AllTasksPage = () => {
 
       toast.success('Task created successfully.');
       setIsCreateModalOpen(false);
+      resetForm();
       fetchTasks();
     } catch (err) {
       setFormError(err.message || 'Failed to create task.');
@@ -393,30 +401,13 @@ export const AllTasksPage = () => {
       setFormError('Task title is required.');
       return;
     }
-    const previousContactId = selectedTask?.assignedContact?._id || selectedTask?.assignedContact || '';
-    if (
-      !contactId ||
-      (!contacts.some((contact) => contact._id === contactId && contact.isActive) &&
-        contactId !== previousContactId)
-    ) {
-      setFormError('Select an active contact before saving this task.');
-      return;
-    }
-    const currentContactId = selectedTask?.assignedContact?._id || selectedTask?.assignedContact || '';
-    if (
-      !contactId ||
-      (!contacts.some((contact) => contact._id === contactId && contact.isActive) &&
-        contactId !== currentContactId)
-    ) {
-      setFormError('Select an active contact before saving this task.');
-      return;
-    }
 
     setSubmitting(true);
     try {
       await taskService.updateTask(selectedTask._id, {
         title: formTitle.trim(),
         description: formDesc.trim(),
+        assignee: assignee || null,
         contactId: contactId || null,
         status: formStatus,
         priority: formPriority,
@@ -936,7 +927,7 @@ export const AllTasksPage = () => {
             </select>
           </FormField>
 
-          <FormField label="Assign To" required>
+          <FormField label="Assign To" required as="div">
             <input
               type="search"
               className="input-field"
@@ -1089,7 +1080,7 @@ export const AllTasksPage = () => {
             />
           </FormField>
 
-          <FormField label="Assign To" required>
+          <FormField label="Assign To" required as="div">
             <input
               type="search"
               className="input-field"
