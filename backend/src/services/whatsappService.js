@@ -473,32 +473,81 @@ export const closeWhatsAppListener = async () => {
  * @param {string} targetJid - e.g. "447123456789@s.whatsapp.net" or "120363049482690322@g.us"
  * @param {string} messageText - formatted notification message
  */
-export async function sendWhatsAppMessage(targetJid, messageText) {
-  if (!sock) {
-    console.warn('[WA_OUTBOUND] Cannot send message: Baileys socket is not connected.');
-    return false;
+const normalizeWhatsAppPhoneNumber = (target) => {
+  let digits = String(target || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+
+  if (digits.startsWith('03') && digits.length === 11) {
+    digits = `92${digits.slice(1)}`;
+  } else if (digits.startsWith('07') && digits.length === 11) {
+    digits = `44${digits.slice(1)}`;
+  } else if (digits.startsWith('920') || digits.startsWith('440')) {
+    digits = digits.slice(0, 2) + digits.slice(3);
   }
 
-  if (!targetJid || typeof targetJid !== 'string' || !targetJid.trim()) {
-    console.warn('[WA_OUTBOUND] Cannot send message: WhatsApp recipient is not configured.');
-    return false;
+  return /^\d{7,15}$/.test(digits) ? digits : '';
+};
+
+/**
+ * Send a WhatsApp task notification to an individual number or group JID.
+ * Individual numbers are resolved by WhatsApp first so Baileys can use the
+ * registered JID (including LID addresses where applicable).
+ */
+export async function sendWhatsAppTaskNotification(target, messageText) {
+  if (!sock) {
+    logger.error('[WA_OUTBOUND] Cannot send: Baileys socket is NOT connected.');
+    return { success: false, reason: 'Socket not connected' };
+  }
+
+  if (typeof target !== 'string' || !target.trim()) {
+    logger.warn('[WA_OUTBOUND] Cannot send: WhatsApp recipient is not configured.');
+    return { success: false, reason: 'Recipient not configured' };
+  }
+
+  if (typeof messageText !== 'string' || !messageText.trim()) {
+    logger.warn('[WA_OUTBOUND] Cannot send: message text is empty.');
+    return { success: false, reason: 'Message text is empty' };
   }
 
   try {
-    // Format individual phone numbers if only raw digits were passed
-    let formattedJid = targetJid.trim();
-    if (!formattedJid.includes('@')) {
-      const cleanDigits = formattedJid.replace(/[^0-9]/g, '');
-      formattedJid = `${cleanDigits}@s.whatsapp.net`;
+    const trimmedTarget = target.trim();
+    let targetJid;
+
+    if (trimmedTarget.endsWith('@g.us')) {
+      if (!/^\d+@g\.us$/.test(trimmedTarget)) {
+        logger.warn('[WA_OUTBOUND] Cannot send: group JID is invalid.');
+        return { success: false, reason: 'Invalid group JID' };
+      }
+      targetJid = trimmedTarget;
+    } else {
+      const cleanDigits = normalizeWhatsAppPhoneNumber(trimmedTarget);
+      if (!cleanDigits) {
+        logger.warn('[WA_OUTBOUND] Cannot send: phone number is invalid.');
+        return { success: false, reason: 'Invalid phone number' };
+      }
+
+      const matches = await sock.onWhatsApp(cleanDigits);
+      const registeredAccount = matches?.find((match) => match?.exists && match?.jid);
+      if (!registeredAccount) {
+        logger.warn(`[WA_OUTBOUND] Number ${cleanDigits} is not registered on WhatsApp.`);
+        return { success: false, reason: 'Number not on WhatsApp' };
+      }
+      targetJid = registeredAccount.jid;
     }
 
-    await sock.sendMessage(formattedJid, { text: messageText });
-    console.log(`✅ [WA_OUTBOUND] Notification successfully sent to: ${formattedJid}`);
-    return true;
+    logger.info(`[WA_OUTBOUND] Sending task notification to ${targetJid}.`);
+    const sent = await sock.sendMessage(targetJid, { text: messageText.trim() });
+    logger.info(`[WA_OUTBOUND_SUCCESS] Message delivered to ${targetJid}.`);
+    return { success: true, messageId: sent?.key?.id };
   } catch (error) {
-    console.error(`❌ [WA_OUTBOUND_ERROR] Failed to send to ${targetJid}:`, error.message);
-    return false;
+    logger.error(`[WA_OUTBOUND_ERROR] Failed to send WhatsApp message: ${error.message}`);
+    return { success: false, error: error.message };
   }
+}
+
+export async function sendWhatsAppMessage(targetJid, messageText) {
+  const result = await sendWhatsAppTaskNotification(targetJid, messageText);
+  return result.success;
 }
 
 // ─── Internals exposed for unit tests ────────────────────────────────────────
@@ -515,5 +564,6 @@ export const whatsappListenerInternals = {
   shouldProcessMessage,
   getConfiguredGroupId,
   getAllowedGroups,
-  shouldIgnoreJid
+  shouldIgnoreJid,
+  normalizeWhatsAppPhoneNumber
 };

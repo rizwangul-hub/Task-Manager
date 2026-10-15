@@ -11,7 +11,11 @@ import {
 } from '../src/utils/metaWhatsApp.js';
 import { whatsappParserService } from '../src/services/whatsappParser.service.js';
 import { whatsappPayloadAdapterService } from '../src/services/whatsappPayloadAdapter.service.js';
-import { whatsappListenerInternals, sendWhatsAppMessage } from '../src/services/whatsappService.js';
+import {
+  whatsappListenerInternals,
+  sendWhatsAppMessage,
+  sendWhatsAppTaskNotification
+} from '../src/services/whatsappService.js';
 import { uploadBufferToCloudinary } from '../src/services/cloudinaryUploadService.js';
 
 test('WhatsApp task schema defaults and source enum', async () => {
@@ -307,5 +311,16 @@ test('sendWhatsAppMessage handles disconnected Baileys socket and empty recipien
 
   const resultEmpty = await sendWhatsAppMessage('', 'Hello');
   assert.equal(resultEmpty, false);
+
+  const taskResult = await sendWhatsAppTaskNotification('447123456789', 'Task notification');
+  assert.deepEqual(taskResult, { success: false, reason: 'Socket not connected' });
 });
 
+test('WhatsApp outbound number normalization supports local PK/UK and international formats', () => {
+  const { normalizeWhatsAppPhoneNumber } = whatsappListenerInternals;
+  assert.equal(normalizeWhatsAppPhoneNumber('0300-1234567'), '923001234567');
+  assert.equal(normalizeWhatsAppPhoneNumber('07123 456789'), '447123456789');
+  assert.equal(normalizeWhatsAppPhoneNumber('+92 (0) 300 1234567'), '923001234567');
+  assert.equal(normalizeWhatsAppPhoneNumber('+44 (0) 7123 456789'), '447123456789');
+  assert.equal(normalizeWhatsAppPhoneNumber('12345'), '');
+});

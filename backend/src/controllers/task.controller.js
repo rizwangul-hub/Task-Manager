@@ -4,7 +4,7 @@ import { User, USER_ROLES } from '../models/user.model.js';
 import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { notificationService } from '../services/notification.service.js';
 import { socketService } from '../services/socket.service.js';
-import { sendWhatsAppMessage } from '../services/whatsappService.js';
+import { sendWhatsAppTaskNotification } from '../services/whatsappService.js';
 import { env } from '../config/env.js';
 import { buildCsvString } from '../utils/csv.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -316,7 +316,7 @@ export const taskController = {
         );
 
       if (targetJid) {
-        void sendWhatsAppMessage(targetJid, whatsAppTaskMessage);
+        void sendWhatsAppTaskNotification(targetJid, whatsAppTaskMessage);
       }
 
       // Also dispatch to assignees with registered phone numbers
@@ -327,7 +327,7 @@ export const taskController = {
             if (targetJid && (cleanPhone === targetJid || targetJid.includes(cleanPhone.replace(/[^0-9]/g, '')))) {
               continue;
             }
-            void sendWhatsAppMessage(cleanPhone, whatsAppTaskMessage);
+            void sendWhatsAppTaskNotification(cleanPhone, whatsAppTaskMessage);
           }
         }
       }
