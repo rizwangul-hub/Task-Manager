@@ -102,6 +102,7 @@ export const whatsappMediaService = {
           bytes: upload.bytes || buffer.length,
           uploadedBy: uploaderId
         });
+        console.log(`☁️ [CLOUDINARY_UPLOAD] Uploaded WhatsApp media to Cloudinary: ${upload.url} (${upload.public_id})`);
       } catch (error) {
         error.message = `WhatsApp media ${media.id || index + 1}: ${error.message}`;
         throw error;

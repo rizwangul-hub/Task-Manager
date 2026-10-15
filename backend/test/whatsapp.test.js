@@ -135,6 +135,17 @@ test('Baileys text extraction unwraps media, documents, ephemeral, and view-once
     }
   }), 'Stamp Duty Refund.pdf');
   assert.equal(extractMessageText({}), '');
+
+  const { extractFullMessageText, getMediaObject, getUnwrappedContent } = whatsappListenerInternals;
+  assert.equal(extractFullMessageText({
+    message: { imageMessage: { caption: 'Photo of penalty notice' } }
+  }), 'Photo of penalty notice');
+  assert.equal(extractFullMessageText({
+    message: { documentMessage: { caption: 'Urgent document attached' } }
+  }), 'Urgent document attached');
+  assert.equal(Boolean(getMediaObject(getUnwrappedContent({
+    message: { documentMessage: { caption: 'doc' } }
+  }))), true);
 });
 
 test('Baileys listener parses multiple allowed groups and handles all mode', () => {

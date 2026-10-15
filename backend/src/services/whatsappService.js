@@ -48,38 +48,70 @@ process.once('beforeExit', processCleanup);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Unwrap ephemeral / view-once wrapper layers to reach the real message content. */
-const getMessageContent = (message = {}) => {
-  let content = message;
-  while (
-    content.ephemeralMessage?.message ||
-    content.viewOnceMessage?.message ||
-    content.viewOnceMessageV2?.message ||
-    content.documentWithCaptionMessage?.message
-  ) {
-    content =
-      content.ephemeralMessage?.message ||
-      content.viewOnceMessage?.message ||
-      content.viewOnceMessageV2?.message ||
-      content.documentWithCaptionMessage?.message;
+/** Unwrap ephemeral or view-once wrapper layers to reach the real message content. */
+export const getUnwrappedContent = (msg) => {
+  let content = msg?.message || msg || {};
+  let iterations = 0;
+  while (content && iterations < 5) {
+    if (content.ephemeralMessage?.message) {
+      content = content.ephemeralMessage.message;
+    } else if (content.viewOnceMessage?.message) {
+      content = content.viewOnceMessage.message;
+    } else if (content.viewOnceMessageV2?.message) {
+      content = content.viewOnceMessageV2.message;
+    } else if (content.documentWithCaptionMessage?.message) {
+      content = content.documentWithCaptionMessage.message;
+    } else {
+      break;
+    }
+    iterations += 1;
   }
   return content;
 };
 
-/** Extract plain text from any supported message type. */
-const getMessageText = (content) =>
-  String(
-    content?.conversation ||
-    content?.extendedTextMessage?.text ||
-    content?.imageMessage?.caption ||
-    content?.videoMessage?.caption ||
-    content?.documentMessage?.caption ||
-    content?.documentMessage?.fileName ||
-    ''
-  ).trim();
+/** Deep Caption & Text Extractor across all WhatsApp message wrappers. */
+export const extractFullMessageText = (msg) => {
+  if (!msg) return '';
+  const m = msg.message || msg;
 
-const extractMessageText = (message) =>
-  getMessageText(getMessageContent(message?.message));
+  // Unwrap ephemeral, view-once, or document-with-caption containers
+  const content = getUnwrappedContent(m);
+
+  const text =
+    content.conversation ||
+    content.extendedTextMessage?.text ||
+    content.imageMessage?.caption ||
+    content.videoMessage?.caption ||
+    content.documentMessage?.caption ||
+    content.documentMessage?.fileName ||
+    content.documentWithCaptionMessage?.message?.documentMessage?.caption ||
+    content.documentWithCaptionMessage?.message?.documentMessage?.fileName ||
+    m.conversation ||
+    m.extendedTextMessage?.text ||
+    m.imageMessage?.caption ||
+    m.videoMessage?.caption ||
+    m.documentMessage?.caption ||
+    m.documentMessage?.fileName ||
+    '';
+
+  return String(text || '').trim();
+};
+
+/** Extract media object (image, document, video, etc.) from unwrapped content. */
+export const getMediaObject = (content) => {
+  if (!content || typeof content !== 'object') return null;
+  return (
+    content.imageMessage ||
+    content.documentMessage ||
+    content.videoMessage ||
+    content.audioMessage ||
+    content.stickerMessage ||
+    null
+  );
+};
+
+const getMessageText = (content) => extractFullMessageText(content);
+const extractMessageText = (message) => extractFullMessageText(message);
 
 /** Map message keywords to a group title for task categorisation. */
 const getGroupTitle = (text) => {
@@ -161,21 +193,27 @@ const teardownSocket = (existingSocket) => {
   }
 };
 
-/** Download and buffer an image message, enforcing the byte-size limit. */
-const downloadImage = async (message, sockRef) => {
+/** Download and buffer media (image, document, video), enforcing the byte-size limit. */
+const downloadMediaBuffer = async (message, content, sockRef) => {
+  // Baileys requires the message object to directly contain the media field (imageMessage, documentMessage, etc.)
+  const directMessage = {
+    key: message.key,
+    message: content
+  };
+
   const buffer = await downloadMediaMessage(
-    message,
+    directMessage,
     'buffer',
     {},
-    { logger: baileysLogger, reuploadRequest: sockRef.updateMediaMessage }
+    { logger: baileysLogger, reuploadRequest: sockRef?.updateMediaMessage }
   );
-  const imageBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-  if (imageBuffer.length > MAX_MEDIA_BYTES) {
+  const mediaBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  if (mediaBuffer.length > MAX_MEDIA_BYTES) {
     throw new Error(
-      `WhatsApp image exceeds the configured ${MAX_MEDIA_BYTES}-byte limit.`
+      `WhatsApp media exceeds the configured ${MAX_MEDIA_BYTES}-byte limit.`
     );
   }
-  return imageBuffer;
+  return mediaBuffer;
 };
 
 // ─── Core message handler ─────────────────────────────────────────────────────
@@ -195,10 +233,10 @@ const handleMessage = async (activeSock, message) => {
 
   inFlightMessageIds.add(messageId);
   try {
-    const content = getMessageContent(message.message);
+    const content = getUnwrappedContent(message);
     if (!content) return;
 
-    const rawText = extractMessageText(message);
+    const rawText = extractFullMessageText(message);
     const senderName = message.pushName || '';
     const senderPhone = String(message.key.participant || '')
       .replace(/:\d+@/, '@')
@@ -215,20 +253,24 @@ const handleMessage = async (activeSock, message) => {
       ? cleanText.split(/\r?\n/, 1)[0]?.slice(0, 80).trim()
       : `WhatsApp Media from ${senderName || senderPhone || 'Member'} - ${new Date().toLocaleTimeString()}`;
 
-    const mediaMessage = content.imageMessage || content.documentMessage || content.videoMessage;
+    const mediaObj = getMediaObject(content);
     const media = [];
 
-    if (mediaMessage) {
+    if (mediaObj) {
       try {
-        const imageBuffer = await downloadImage(message, activeSock);
+        const mediaBuffer = await downloadMediaBuffer(message, content, activeSock);
+        const mimeType = mediaObj.mimetype || (content.imageMessage ? 'image/jpeg' : 'application/pdf');
+        const fileName = mediaObj.fileName || getMediaFileName(messageId, mimeType);
+
         media.push({
           id: messageId,
-          base64: imageBuffer.toString('base64'),
-          mimeType: mediaMessage.mimetype || 'image/jpeg',
-          fileName: mediaMessage.fileName || getMediaFileName(messageId, mediaMessage.mimetype)
+          base64: mediaBuffer.toString('base64'),
+          mimeType,
+          fileName
         });
+        console.log(`📎 [WA_MEDIA] Successfully downloaded media: ${fileName} (${mimeType}, ${mediaBuffer.length} bytes)`);
       } catch (err) {
-        logger.error(`[WA] Failed to download media attachment for ${messageId}:`, err);
+        console.error(`❌ [WA_MEDIA_ERROR] Failed to download media attachment for ${messageId}:`, err.message);
       }
     }
 
@@ -363,12 +405,13 @@ export const initWhatsAppListener = async () => {
       for (const msg of messages) {
         const jid = msg.key?.remoteJid || '';
         if (jid.endsWith('@g.us')) {
-          const text = extractMessageText(msg);
+          const text = extractFullMessageText(msg);
+          const hasMedia = Boolean(getMediaObject(getUnwrappedContent(msg)));
           console.log('🎯 [TARGET GROUP MESSAGE RECEIVED]:', {
             jid,
             sender: msg.pushName || msg.key?.participant || 'Self',
             fromMe: msg.key?.fromMe,
-            text: text || '[Media/No Text]'
+            text: text || (hasMedia ? '[Media Attached]' : '[No Text]')
           });
         }
         if (!shouldProcessMessage(msg)) continue;
@@ -430,6 +473,9 @@ export const whatsappListenerInternals = {
   getGroupTitle,
   getMessageText,
   extractMessageText,
+  extractFullMessageText,
+  getUnwrappedContent,
+  getMediaObject,
   isExpectedHistoryDecryptError,
   isAllowAllGroups,
   isTargetGroup,
