@@ -54,23 +54,32 @@ const getMessageContent = (message = {}) => {
   while (
     content.ephemeralMessage?.message ||
     content.viewOnceMessage?.message ||
-    content.viewOnceMessageV2?.message
+    content.viewOnceMessageV2?.message ||
+    content.documentWithCaptionMessage?.message
   ) {
     content =
       content.ephemeralMessage?.message ||
       content.viewOnceMessage?.message ||
-      content.viewOnceMessageV2?.message;
+      content.viewOnceMessageV2?.message ||
+      content.documentWithCaptionMessage?.message;
   }
   return content;
 };
 
 /** Extract plain text from any supported message type. */
 const getMessageText = (content) =>
-  content.conversation ||
-  content.extendedTextMessage?.text ||
-  content.imageMessage?.caption ||
-  content.documentMessage?.caption ||
-  '';
+  String(
+    content?.conversation ||
+    content?.extendedTextMessage?.text ||
+    content?.imageMessage?.caption ||
+    content?.videoMessage?.caption ||
+    content?.documentMessage?.caption ||
+    content?.documentMessage?.fileName ||
+    ''
+  ).trim();
+
+const extractMessageText = (message) =>
+  getMessageText(getMessageContent(message?.message));
 
 /** Map message keywords to a group title for task categorisation. */
 const getGroupTitle = (text) => {
@@ -189,7 +198,7 @@ const handleMessage = async (activeSock, message) => {
     const content = getMessageContent(message.message);
     if (!content) return;
 
-    const text = String(getMessageText(content) || '').trim();
+    const text = extractMessageText(message);
     const mediaMessage = content.imageMessage;
     const media = [];
 
@@ -331,10 +340,7 @@ export const initWhatsAppListener = async () => {
       for (const msg of messages) {
         const jid = msg.key?.remoteJid || '';
         if (jid.endsWith('@g.us')) {
-          const text = msg.message?.conversation ||
-            msg.message?.extendedTextMessage?.text ||
-            msg.message?.imageMessage?.caption ||
-            '';
+          const text = extractMessageText(msg);
           console.log('🎯 [TARGET GROUP MESSAGE RECEIVED]:', {
             jid,
             sender: msg.pushName || msg.key?.participant || 'Self',
@@ -400,6 +406,7 @@ export const closeWhatsAppListener = async () => {
 export const whatsappListenerInternals = {
   getGroupTitle,
   getMessageText,
+  extractMessageText,
   isExpectedHistoryDecryptError,
   isAllowAllGroups,
   isTargetGroup,

@@ -112,6 +112,31 @@ test('Baileys message helpers extract text and route group titles', () => {
   assert.equal(whatsappListenerInternals.getGroupTitle('General request'), 'General Tasks');
 });
 
+test('Baileys text extraction unwraps media, documents, ephemeral, and view-once messages', () => {
+  const { extractMessageText } = whatsappListenerInternals;
+  assert.equal(extractMessageText({
+    message: { imageMessage: { caption: '  PCN image  ' } }
+  }), 'PCN image');
+  assert.equal(extractMessageText({
+    message: { ephemeralMessage: { message: { documentMessage: { caption: 'Invoice task' } } } }
+  }), 'Invoice task');
+  assert.equal(extractMessageText({
+    message: { viewOnceMessage: { message: { videoMessage: { caption: '  Bridging update ' } } } }
+  }), 'Bridging update');
+  assert.equal(extractMessageText({
+    message: {
+      viewOnceMessageV2: {
+        message: {
+          documentWithCaptionMessage: {
+            message: { documentMessage: { fileName: '  Stamp Duty Refund.pdf  ' } }
+          }
+        }
+      }
+    }
+  }), 'Stamp Duty Refund.pdf');
+  assert.equal(extractMessageText({}), '');
+});
+
 test('Baileys listener parses multiple allowed groups and handles all mode', () => {
   const previousGroupIds = process.env.PIXX_WHATSAPP_GROUP_ID;
   try {
