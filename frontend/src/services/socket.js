@@ -15,8 +15,10 @@ export const socketService = {
       return socketInstance;
     }
 
+    const token = typeof window !== 'undefined' ? localStorage.getItem('task_access_token') : null;
     socketInstance = io(SOCKET_URL, {
       withCredentials: true,
+      auth: { token },
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       reconnectionDelay: 2000,

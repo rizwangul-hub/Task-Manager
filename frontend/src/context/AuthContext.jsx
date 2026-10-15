@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { AuthContext } from './authContextDef';
 import { authService } from '../services/authService';
+import { apiClient } from '../services/api';
 
 const normalizeRole = (role) => ({
   ADMIN: 'Admin',
@@ -24,8 +25,12 @@ export const AuthProvider = ({ children }) => {
       // If getMe fails, try refreshing the session
       try {
         const refreshResponse = await authService.refresh();
+        if (refreshResponse.data?.accessToken) {
+          apiClient.setTokens(refreshResponse.data.accessToken, refreshResponse.data.refreshToken);
+        }
         setUser(refreshResponse.data.user);
       } catch {
+        apiClient.clearTokens();
         setUser(null);
         // If DB is offline, capture that diagnostic message
         if (err.status === 503) {
@@ -43,6 +48,7 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const handleSessionExpired = () => {
+      apiClient.clearTokens();
       setUser(null);
     };
 
@@ -56,6 +62,9 @@ export const AuthProvider = ({ children }) => {
     setError(null);
     try {
       const response = await authService.login(email, password);
+      if (response.data?.accessToken) {
+        apiClient.setTokens(response.data.accessToken, response.data.refreshToken);
+      }
       setUser(response.data.user);
       return response.data.user;
     } catch (err) {
@@ -70,6 +79,7 @@ export const AuthProvider = ({ children }) => {
     } catch (err) {
       console.warn('Logout API warning:', err);
     } finally {
+      apiClient.clearTokens();
       setUser(null);
     }
   }, []);

@@ -1,6 +1,7 @@
 /**
  * Centralized API client reading backend base URL from Vite environment variables.
  * Automatically manages credentials, headers, query parameters, and session recovery.
+ * Supports both HTTP-only cookies and Authorization Bearer headers for cross-domain stability.
  */
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -10,6 +11,28 @@ class ApiClient {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.isRefreshing = false;
     this.refreshSubscribers = [];
+  }
+
+  getToken() {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('task_access_token');
+  }
+
+  getRefreshToken() {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('task_refresh_token');
+  }
+
+  setTokens(accessToken, refreshToken) {
+    if (typeof window === 'undefined') return;
+    if (accessToken) localStorage.setItem('task_access_token', accessToken);
+    if (refreshToken) localStorage.setItem('task_refresh_token', refreshToken);
+  }
+
+  clearTokens() {
+    if (typeof window === 'undefined') return;
+    localStorage.removeItem('task_access_token');
+    localStorage.removeItem('task_refresh_token');
   }
 
   buildUrl(endpoint, params = {}) {
@@ -38,6 +61,12 @@ class ApiClient {
       ...fetchOptions.headers
     };
 
+    // Attach Bearer token from local storage if available for cross-domain resilience
+    const token = this.getToken();
+    if (token && !headers['Authorization']) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     if (!(fetchOptions.body instanceof FormData) && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
     }
@@ -53,13 +82,19 @@ class ApiClient {
       const isJson = response.headers.get('content-type')?.includes('application/json');
       const data = isJson ? await response.json() : await response.text();
 
+      // Automatically store tokens when logging in or refreshing
+      if (data?.data?.accessToken) {
+        this.setTokens(data.data.accessToken, data.data.refreshToken);
+      }
+
       // If unauthorized and not already an auth endpoint or retry, attempt silent token refresh
-      if (response.status === 401 && !isRetry && !endpoint.includes('/auth/')) {
+      if (response.status === 401 && !isRetry && !endpoint.includes('/auth/login')) {
         try {
           await this.refreshToken();
           return await this.request(endpoint, options, true);
         } catch {
           // If refresh fails, session is definitively expired
+          this.clearTokens();
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('auth:session-expired'));
           }
@@ -96,22 +131,29 @@ class ApiClient {
     this.isRefreshing = true;
 
     try {
+      const storedRefreshToken = this.getRefreshToken();
       const refreshUrl = `${this.baseUrl}/auth/refresh`;
       const res = await fetch(refreshUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include'
+        credentials: 'include',
+        body: storedRefreshToken ? JSON.stringify({ refreshToken: storedRefreshToken }) : undefined
       });
 
       if (!res.ok) {
+        this.clearTokens();
         throw new Error('Failed to refresh authentication session.');
       }
 
       const data = await res.json();
+      if (data?.data?.accessToken) {
+        this.setTokens(data.data.accessToken, data.data.refreshToken);
+      }
       this.refreshSubscribers.forEach((sub) => sub.resolve(data));
       this.refreshSubscribers = [];
       return data;
     } catch (err) {
+      this.clearTokens();
       this.refreshSubscribers.forEach((sub) => sub.reject(err));
       this.refreshSubscribers = [];
       throw err;
