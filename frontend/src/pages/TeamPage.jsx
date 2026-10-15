@@ -235,6 +235,7 @@ export const TeamPage = () => {
               <tr>
                 <th>Employee</th>
                 <th style={{ width: '220px' }}>Email Address</th>
+                <th style={{ width: '180px' }}>WhatsApp</th>
                 <th style={{ width: '130px' }}>Role</th>
                 <th style={{ width: '120px' }}>Status</th>
                 <th style={{ width: '150px' }}>Last Login</th>
@@ -260,6 +261,7 @@ export const TeamPage = () => {
                       <span>{item.email}</span>
                     </div>
                   </td>
+                  <td>{item.whatsappNumber || 'Not set'}</td>
                   <td>
                     <span className={`role-badge role-${item.role.toLowerCase()}`}>
                       <Shield size={12} />

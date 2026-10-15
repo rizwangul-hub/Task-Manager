@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { Notification, NOTIFICATION_CHANNELS, EMAIL_DELIVERY_STATUSES } from '../src/models/notification.model.js';
 import { Task, TASK_SOURCES } from '../src/models/task.model.js';
+import { User } from '../src/models/user.model.js';
 import { emailService } from '../src/services/email.service.js';
 import {
   verifyMetaWebhookSignature,
@@ -24,6 +25,25 @@ test('WhatsApp task schema defaults and source enum', async () => {
     project: '507f1f77bcf86cd799439011',
     taskKey: 'PRJ-WA-12345678',
     creator: '507f1f77bcf86cd799439012'
+  });
+
+  test('User schema stores an optional WhatsApp number', async () => {
+    const user = new User({
+      name: 'WhatsApp User',
+      email: 'whatsapp-user@example.com',
+      passwordHash: 'test-hash',
+      whatsappNumber: ' 923179500901 '
+    });
+
+    assert.equal(user.whatsappNumber, '923179500901');
+    await user.validate();
+
+    const withoutNumber = new User({
+      name: 'No WhatsApp User',
+      email: 'no-whatsapp-user@example.com',
+      passwordHash: 'test-hash'
+    });
+    assert.equal(withoutNumber.whatsappNumber, null);
   });
 
   assert.equal(task.title, 'WhatsApp intake');
