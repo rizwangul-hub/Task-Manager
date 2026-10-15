@@ -9,7 +9,7 @@ import {
   OUTBOX_STATUSES,
   User
 } from '../src/models/index.js';
-import { emailService } from '../src/services/email.service.js';
+import { emailService, resolveEmailRecipient } from '../src/services/email.service.js';
 import { schedulerService } from '../src/services/scheduler.service.js';
 import { verifyAccessToken } from '../src/utils/token.js';
 
@@ -90,6 +90,28 @@ test('Phase 4 - Email service handles unconfigured state safely without throwing
 
   assert.strictEqual(res.success, false);
   assert.strictEqual(res.reason, 'unconfigured');
+});
+
+test('Placeholder task recipients are routed to EMAIL_USER', () => {
+  const fallback = process.env.EMAIL_USER?.trim();
+  if (!fallback) {
+    assert.throws(
+      () => resolveEmailRecipient('assignee@pixxtechnologiees.com'),
+      /EMAIL_USER is not a valid fallback/
+    );
+    return;
+  }
+
+  for (const placeholder of [
+    'assignee@pixxtechnologiees.com',
+    'test@example.com',
+    'dummy@invalid',
+    'placeholder.user@gmail.com'
+  ]) {
+    assert.equal(resolveEmailRecipient(placeholder), fallback);
+  }
+
+  assert.equal(resolveEmailRecipient('person@gmail.com'), 'person@gmail.com');
 });
 
 test('Phase 4 - Scheduler service check runs without fatal crash when DB is offline', async () => {

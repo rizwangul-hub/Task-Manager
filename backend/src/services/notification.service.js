@@ -6,7 +6,11 @@ import {
 } from '../models/notification.model.js';
 import { NotificationOutbox, OUTBOX_STATUSES } from '../models/notificationOutbox.model.js';
 import { User } from '../models/user.model.js';
-import { emailService, sendTaskNotificationEmail } from './email.service.js';
+import {
+  emailService,
+  resolveEmailRecipient,
+  sendTaskNotificationEmail
+} from './email.service.js';
 import { socketService } from './socket.service.js';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
@@ -188,7 +192,7 @@ export const notificationService = {
           const outboxEntry = await NotificationOutbox.create({
             recipient: recipient._id,
             notification: createdNotification._id,
-            recipientEmail: recipient.email,
+            recipientEmail: resolveEmailRecipient(recipient.email),
             recipientName: recipient.name,
             notificationType: type,
             channel: 'email',

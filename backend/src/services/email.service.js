@@ -107,26 +107,65 @@ const escapeHtml = (value) =>
     "'": '&#39;'
   })[character]);
 
+const placeholderEmailDomains = new Set([
+  'pixxtechnologiees.com',
+  'example.com',
+  'example.org',
+  'example.net',
+  'test.com',
+  'invalid',
+  'localhost'
+]);
+
+const isPlaceholderEmail = (email) => {
+  if (typeof email !== 'string') return true;
+  const normalized = email.trim().toLowerCase();
+  const separator = normalized.lastIndexOf('@');
+  if (separator <= 0 || separator === normalized.length - 1) return true;
+
+  const localPart = normalized.slice(0, separator);
+  const domain = normalized.slice(separator + 1);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return true;
+  return placeholderEmailDomains.has(domain) ||
+    /\.(example|test|invalid|localhost)$/.test(domain) ||
+    /^(test|dummy|placeholder|example)([+._-]|$)/.test(localPart);
+};
+
+export const resolveEmailRecipient = (to) => {
+  const recipient = typeof to === 'string' ? to.trim() : '';
+  const fallbackRecipient = env.EMAIL.emailUser.trim();
+  const recipientNeedsFallback = isPlaceholderEmail(recipient);
+
+  if (!recipientNeedsFallback) return recipient;
+  if (!fallbackRecipient || isPlaceholderEmail(fallbackRecipient)) {
+    throw new Error('Email recipient is missing or a placeholder, and EMAIL_USER is not a valid fallback address.');
+  }
+
+  logger.info('[EMAIL_RECIPIENT_FALLBACK] Redirecting placeholder or invalid task recipient to EMAIL_USER.');
+  return fallbackRecipient;
+};
+
 export const sendTaskNotificationEmail = async ({ to, subject, htmlContent, textContent }) => {
   if (!emailService.isConfigured()) {
     logger.info(`[EMAIL_SUPPRESSED] Email transport unconfigured. Email not sent to ${to}: "${subject}"`);
     return { success: false, reason: 'unconfigured' };
   }
 
-  logger.info(`[EMAIL_ATTEMPT] Sending email to ${to}: "${subject}"`);
+  const recipient = resolveEmailRecipient(to);
+  logger.info(`[EMAIL_ATTEMPT] Sending email to ${recipient}: "${subject}"`);
   try {
     const info = await transporter.sendMail({
       from: env.EMAIL.from,
-      to,
+      to: recipient,
       subject,
       html: htmlContent,
       text: textContent
     });
 
-    logger.info(`[EMAIL_SENT] Email delivered to ${to}.`, { messageId: info.messageId });
+    logger.info(`[EMAIL_SENT] Email delivered to ${recipient}.`, { messageId: info.messageId });
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    logger.error(`[EMAIL_FAILED] Email delivery to ${to} failed: ${error.message}`);
+    logger.error(`[EMAIL_FAILED] Email delivery to ${recipient} failed: ${error.message}`);
     throw error;
   }
 };
