@@ -37,7 +37,7 @@ const createMockBaileysSocket = ({ readyState = 0 } = {}) => {
   };
 };
 
-const createMockedWhatsAppService = ({ readyState = 0, authStateFactory } = {}) => {
+const createMockedWhatsAppService = ({ readyState = 0, authStateFactory, onReady = async () => {} } = {}) => {
   let socket;
   const service = createWhatsAppService({
     authStateFactory: authStateFactory || (async () => ({
@@ -50,6 +50,7 @@ const createMockedWhatsAppService = ({ readyState = 0, authStateFactory } = {}) 
     },
     sendReadyTimeoutMs: 10,
     reconnectDelaysMs: [60_000],
+    onReady,
     serviceLogger: { info() {}, warn() {}, error() {} }
   });
   return { service, getSocket: () => socket };
@@ -105,6 +106,93 @@ test('Baileys reports disconnected sends as retryable and does not create a comp
   assert.equal(result.retryable, true);
   assert.equal(service.getDiagnostics().connectionStatus, 'connecting');
   assert.equal(await service.initialize(), originalSocket);
+  await service.close();
+});
+
+test('Baileys restores registered credentials before opening its socket', async () => {
+  let authPath;
+  const { service } = createMockedWhatsAppService({
+    authStateFactory: async (path) => {
+      authPath = path;
+      return {
+        state: { creds: { registered: true } },
+        saveCreds: async () => {}
+      };
+    }
+  });
+  await service.initialize();
+  assert.equal(typeof authPath, 'string');
+  assert.equal(service.getDiagnostics().authenticationValid, true);
+  await service.close();
+});
+
+test('Baileys replaces stale sockets and sends only through the current connection', async () => {
+  const sockets = [];
+  let readyCount = 0;
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      const socket = createMockBaileysSocket({ readyState: 1 });
+      sockets.push(socket);
+      return socket;
+    },
+    onReady: async () => { readyCount += 1; },
+    reconnectDelaysMs: [60_000],
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const staleSocket = sockets[0];
+  staleSocket.emit('connection.update', { connection: 'open' });
+  staleSocket.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 408 } } }
+  });
+
+  const currentSocket = await service.initialize();
+  assert.equal(sockets.length, 2);
+  assert.equal(service.getSocket(), currentSocket);
+  staleSocket.emit('connection.update', { connection: 'open' });
+  currentSocket.emit('connection.update', { connection: 'open' });
+
+  const result = await service.sendWhatsAppTaskNotification('447123456789', 'Task assigned');
+  assert.equal(result.success, true);
+  assert.equal(staleSocket.lastSent, undefined);
+  assert.equal(currentSocket.lastSent.jid, '447123456789@s.whatsapp.net');
+  assert.equal(readyCount, 2);
+  await service.close();
+});
+
+test('Baileys does not recreate a logged-out session automatically', async () => {
+  let socketCount = 0;
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      socketCount += 1;
+      return createMockBaileysSocket({ readyState: 1 });
+    },
+    loggedOutCode: 401,
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  const socket = await service.initialize();
+  socket.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 401 } } }
+  });
+
+  assert.equal(await service.initialize(), null);
+  assert.equal(socketCount, 1);
+  assert.equal(service.getDiagnostics().connectionStatus, 'logged_out');
+  const result = await service.sendWhatsAppTaskNotification('447123456789', 'Task assigned');
+  assert.equal(result.retryable, false);
   await service.close();
 });
 

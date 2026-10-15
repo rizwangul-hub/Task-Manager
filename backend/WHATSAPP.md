@@ -13,6 +13,17 @@ assignment notifications. Keep this credential directory private and persistent
 across deployments. Contacts need a valid international WhatsApp number; local
 Pakistan (`03...`) and UK (`07...`) mobile formats are normalized before lookup.
 
+## Backend hosting requirement
+
+Baileys must run inside the long-lived Node.js process started by `npm start`
+(`src/server.js`). A serverless function deployment such as the backend's
+`api/index.js` entry on Vercel only exports the Express app; it does not start
+the Baileys connection, and function instances cannot reliably keep its
+WebSocket alive. Deploy the backend API on an always-on Node.js host, configure
+MongoDB and `AUTH_INFO_PATH`, and mount the existing authentication directory
+as private persistent storage. Run a single backend instance for the paired
+WhatsApp account. The frontend may remain on Vercel.
+
 Assignment notifications are recorded in the task WhatsApp outbox. `Sent` means
 Baileys accepted the message, not that the recipient's device confirmed
 delivery. Failed messages can be retried from the task's assignment history.
