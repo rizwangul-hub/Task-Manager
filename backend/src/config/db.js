@@ -2,37 +2,57 @@ import mongoose from 'mongoose';
 import { env } from './env.js';
 import { logger } from '../utils/logger.js';
 
-let isConnecting = false;
+let cachedPromise = null;
 
 /**
- * Connect to MongoDB instance using Mongoose
+ * Connect to MongoDB instance using Mongoose with promise reuse for serverless concurrency
  */
 export const connectDB = async () => {
   if (!env.MONGODB_URI) {
     logger.warn('MongoDB connection skipped: MONGO_URI or MONGODB_URI is not defined in environment variables.');
-    return;
+    return null;
   }
 
-  if (mongoose.connection.readyState === 1 || isConnecting) {
-    return;
+  // 1. If already connected, return existing connection immediately
+  if (mongoose.connection.readyState === 1) {
+    return mongoose.connection;
   }
 
-  try {
-    isConnecting = true;
-    logger.info('Connecting to MongoDB database...');
+  // 2. If a connection attempt is already in flight, reuse the same promise
+  // This prevents concurrent requests from proceeding while readyState is 2 (connecting)
+  if (cachedPromise) {
+    return cachedPromise;
+  }
 
-    await mongoose.connect(env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
+  logger.info('Connecting to MongoDB database...');
+
+  cachedPromise = mongoose
+    .connect(env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 8000,
+      maxPoolSize: 10,
+    })
+    .then((mongooseInstance) => {
+      logger.info('Successfully connected to MongoDB database.');
+      return mongooseInstance;
+    })
+    .catch((error) => {
+      cachedPromise = null; // Reset on failure so subsequent requests can retry
+      logger.error('Failed to connect to MongoDB database:', error);
+      throw error;
     });
 
-    logger.info('Successfully connected to MongoDB database.');
-  } catch (error) {
-    logger.error('Failed to connect to MongoDB database:', error);
-    logger.warn('Backend will continue running in offline database mode. Endpoints requiring database access will fail safely.');
-  } finally {
-    isConnecting = false;
-  }
+  return cachedPromise;
 };
+
+// Reset cached promise on disconnection or error so next request can reconnect
+mongoose.connection.on('disconnected', () => {
+  cachedPromise = null;
+});
+
+mongoose.connection.on('error', (err) => {
+  cachedPromise = null;
+  logger.error('MongoDB connection error:', err);
+});
 
 /**
  * Returns database connection status summary for health checks
@@ -60,6 +80,8 @@ export const getDBStatus = () => {
 export const disconnectDB = async () => {
   if (mongoose.connection.readyState !== 0) {
     await mongoose.connection.close();
+    cachedPromise = null;
     logger.info('MongoDB connection closed gracefully.');
   }
 };
+

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { connectDB } from '../config/db.js';
 import { verifyAccessToken } from '../utils/token.js';
 import { User, normalizeUserRole } from '../models/user.model.js';
 import { AppError } from './errorHandler.js';
@@ -24,7 +25,15 @@ export const authenticate = async (req, res, next) => {
     return next(new AppError('Session expired or invalid token. Please log in again.', 401));
   }
 
-  // 3. Check if database is reachable before querying user record
+  // 3. Ensure database is connected before querying user record
+  if (mongoose.connection.readyState !== 1) {
+    try {
+      await connectDB();
+    } catch {
+      // handled by readyState check below
+    }
+  }
+
   if (mongoose.connection.readyState !== 1) {
     return next(new AppError('Database service is currently unavailable. Please check MongoDB configuration.', 503));
   }

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { connectDB } from '../config/db.js';
 import { User } from '../models/user.model.js';
 import { generateTokens, setAuthCookies, clearAuthCookies, verifyRefreshToken } from '../utils/token.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -6,6 +7,14 @@ import { AppError } from '../middleware/errorHandler.js';
 export const authController = {
   /** Authenticate any active workspace account. */
   login: async (req, res, next) => {
+    if (mongoose.connection.readyState !== 1) {
+      try {
+        await connectDB();
+      } catch {
+        // handled below
+      }
+    }
+
     if (mongoose.connection.readyState !== 1) {
       return next(new AppError('Database service is currently unavailable. Please verify MongoDB connection.', 503));
     }
@@ -72,6 +81,14 @@ export const authController = {
    * POST /api/auth/refresh
    */
   refresh: async (req, res, next) => {
+    if (mongoose.connection.readyState !== 1) {
+      try {
+        await connectDB();
+      } catch {
+        // handled below
+      }
+    }
+
     if (mongoose.connection.readyState !== 1) {
       return next(new AppError('Database service is currently unavailable.', 503));
     }
