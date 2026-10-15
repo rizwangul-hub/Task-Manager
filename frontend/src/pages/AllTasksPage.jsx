@@ -225,9 +225,19 @@ export const AllTasksPage = () => {
           : task
       ));
     };
+    const handleTaskCreated = (createdTask) => {
+      const createdProjectId = createdTask?.project?._id || createdTask?.project;
+      if (projectFilter && createdProjectId?.toString() !== projectFilter.toString()) return;
+      if (!createdTask?._id) return;
+      void fetchTasks();
+    };
     socket.on('task:updated', handleTaskUpdate);
-    return () => socket.off('task:updated', handleTaskUpdate);
-  }, []);
+    socket.on('task:created', handleTaskCreated);
+    return () => {
+      socket.off('task:updated', handleTaskUpdate);
+      socket.off('task:created', handleTaskCreated);
+    };
+  }, [fetchTasks, projectFilter]);
 
   // Clear all filters
   const handleClearFilters = () => {

@@ -7,6 +7,7 @@ import { Comment } from '../models/comment.model.js';
 import { User } from '../models/user.model.js';
 import { WhatsAppWebhookJob, WHATSAPP_JOB_STATUSES } from '../models/whatsappWebhookJob.model.js';
 import { notificationService } from '../services/notification.service.js';
+import { socketService } from '../services/socket.service.js';
 import { whatsappMediaService } from '../services/whatsappMedia.service.js';
 import { whatsappParserService } from '../services/whatsappParser.service.js';
 import { whatsappPayloadAdapterService } from '../services/whatsappPayloadAdapter.service.js';
@@ -222,9 +223,29 @@ const createTaskFromMessage = async (
   });
 
   const populatedTask = await Task.findById(task._id)
-    .populate('project', 'name projectKey manager members')
-    .populate('assignees', 'name email')
-    .populate('creator', 'name email');
+    .populate('project', 'name projectKey status manager members')
+    .populate('assignees', 'name email avatar role')
+    .populate('creator', 'name email avatar');
+
+  const getReferenceId = (reference) => reference?._id?.toString() || reference?.toString();
+  const authorizedUserIds = new Set([
+    getReferenceId(populatedTask.creator),
+    ...(populatedTask.assignees || []).map(getReferenceId),
+    getReferenceId(populatedTask.project?.manager),
+    ...(populatedTask.project?.members || []).map(getReferenceId)
+  ].filter(Boolean));
+  const taskPayload = populatedTask.toJSON();
+  if (!socketService.getIO()) {
+    logger.warn(`[SOCKET_EMIT] Unable to emit task:created for task "${populatedTask.title}": Socket.IO is not initialized.`);
+  } else {
+    authorizedUserIds.forEach((userId) => {
+      socketService.emitUserEvent(userId, 'task:created', taskPayload);
+    });
+    logger.info(
+      `[SOCKET_EMIT] Sent task:created for task "${populatedTask.title}" to ${authorizedUserIds.size} authorized project user(s).`
+    );
+  }
+
   await notificationService.notifyWhatsAppTaskCreated(populatedTask, message.senderPhone, {
     senderName: message.senderName,
     groupName: groupTitle || parsed.groupTitle || parsed.groupName
