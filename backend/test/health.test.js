@@ -42,6 +42,25 @@ test('Root API endpoint GET /api returns service descriptor', async (t) => {
   }
 });
 
+test('Backend root GET / returns service links instead of 404', async (t) => {
+  const server = http.createServer(app);
+
+  await new Promise((resolve) => server.listen(0, resolve));
+  const port = server.address().port;
+
+  try {
+    const response = await fetch(`http://localhost:${port}/`);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(data.status, 'ok');
+    assert.strictEqual(data.api, '/api');
+    assert.strictEqual(data.health, '/api/health');
+  } finally {
+    server.close();
+  }
+});
+
 test('Unmatched route returns 404 error with clean JSON', async (t) => {
   const server = http.createServer(app);
   

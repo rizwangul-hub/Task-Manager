@@ -66,6 +66,15 @@ app.use('/api', apiLimiter);
 // Mount main API routes
 app.use('/api', apiRouter);
 
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'PixxTechnologiees Task Manager API',
+    api: '/api',
+    health: '/api/health'
+  });
+});
+
 // 404 Handler for unmatched routes
 app.use(notFoundHandler);
 
