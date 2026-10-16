@@ -34,6 +34,9 @@ export const normalizeWhatsAppPhoneNumber = (target) => {
 const redactPhoneNumber = (value) => String(value || '').replace(/\+?\d[\d\s().-]{5,}\d/g, '[REDACTED_PHONE]');
 const redactError = (error) => redactPhoneNumber(error?.message || error || 'Unknown WhatsApp error')
   .replace(/[0-9a-fA-F]{24,}/g, '[REDACTED_ID]');
+const isUnsupportedServerlessRuntime = () => process.env.VERCEL === '1';
+const SERVERLESS_RUNTIME_ERROR =
+  'Baileys requires a persistent Node.js process; this API is running as a Vercel serverless function.';
 
 export function extractFullMessageText(msg) {
   if (!msg || !msg.message) return '';
@@ -169,6 +172,13 @@ export const createWhatsAppService = ({
     if (stopped) return null;
     if (connectionState === CONNECTION_STATES.LOGGED_OUT) return null;
     if (authStateLoadFailed) return null;
+    if (isUnsupportedServerlessRuntime()) {
+      connectionState = CONNECTION_STATES.DISCONNECTED;
+      lastError = SERVERLESS_RUNTIME_ERROR;
+      serviceLogger.warn(`[WA] ${SERVERLESS_RUNTIME_ERROR}`);
+      notifyWaiters();
+      return null;
+    }
     if (process.env.ENABLE_WHATSAPP === 'false' || process.env.WHATSAPP_ENABLED === 'false') {
       connectionState = CONNECTION_STATES.DISCONNECTED;
       serviceLogger.info('[WA] Baileys outbound connection disabled via configuration flag.');
@@ -378,6 +388,7 @@ export const createWhatsAppService = ({
   const waitForReady = async () => {
     if (isReady()) return true;
     if (
+      isUnsupportedServerlessRuntime() ||
       connectionState === CONNECTION_STATES.LOGGED_OUT ||
       authStateLoadFailed ||
       stopped
@@ -446,7 +457,9 @@ export const createWhatsAppService = ({
     }
 
     if (!(await waitForReady())) {
-      const reason = connectionState === CONNECTION_STATES.LOGGED_OUT
+      const reason = isUnsupportedServerlessRuntime()
+        ? SERVERLESS_RUNTIME_ERROR
+        : connectionState === CONNECTION_STATES.LOGGED_OUT
         ? 'WhatsApp session is logged out; re-pair the existing account.'
         : authStateLoadFailed
           ? 'Baileys authentication state could not be loaded; check AUTH_INFO_PATH and restart.'
@@ -517,9 +530,17 @@ export const createWhatsAppService = ({
     connectionStatus: connectionState,
     authenticationValid,
     sendingCapabilityStatus: isReady() ? 'ready' : 'unavailable',
+    hostingCompatibility: isUnsupportedServerlessRuntime() ? 'serverless_unsupported' : 'persistent_runtime',
+    hostingCompatibilityMessage: isUnsupportedServerlessRuntime()
+      ? `${SERVERLESS_RUNTIME_ERROR} Deploy the backend API to an always-on Node.js host.`
+      : null,
     lastConnectionAt,
     lastSuccessfulSendAt,
-    lastError: lastError ? redactError(lastError) : null
+    lastError: lastError
+      ? redactError(lastError)
+      : isUnsupportedServerlessRuntime()
+        ? 'Baileys is not initialized in the Vercel serverless runtime.'
+        : null
   });
 
   const getParticipatingGroups = async () => {
@@ -566,4 +587,3 @@ export const sendWhatsAppMessage = async (...args) =>
 export const getWhatsAppDiagnostics = () => whatsappService.getDiagnostics();
 export const getParticipatingGroups = () => whatsappService.getParticipatingGroups();
 export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber };
-

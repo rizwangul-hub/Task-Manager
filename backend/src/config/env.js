@@ -62,8 +62,8 @@ export const env = {
   ],
   REDIS_URL: process.env.REDIS_URL || '',
   JWT: {
-    accessSecret: process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'pixx_default_dev_access_secret_change_in_prod',
-    refreshSecret: process.env.JWT_REFRESH_SECRET || 'pixx_default_dev_refresh_secret_change_in_prod',
+    accessSecret: process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || (nodeEnv === 'production' ? '' : 'pixx_default_dev_access_secret_change_in_prod'),
+    refreshSecret: process.env.JWT_REFRESH_SECRET || (nodeEnv === 'production' ? '' : 'pixx_default_dev_refresh_secret_change_in_prod'),
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || process.env.JWT_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
     cookieSecure: process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production',
@@ -190,5 +190,21 @@ export const validateEnv = () => {
     logger.info('Email credentials are not configured. In-app notifications will function; email alerts will be logged.');
   } else {
     logger.info(`Email configured using ${env.EMAIL.isOAuthConfigured ? 'Google OAuth2' : 'SMTP credentials'}.`);
+  }
+
+  if (process.env.AI_PROVIDER === 'gemini') {
+    if (!env.GEMINI.apiKey) {
+      logger.info('AI_PROVIDER is set to "gemini", but GEMINI_API_KEY is not configured. Falling back to built-in rule-based extractor.');
+    } else {
+      logger.info(`Google Gemini AI task extraction enabled (model: ${env.GEMINI.model}).`);
+    }
+  } else if (process.env.AI_PROVIDER === 'openai') {
+    if (!process.env.OPENAI_API_KEY) {
+      logger.info('AI_PROVIDER is set to "openai", but OPENAI_API_KEY is not configured. Falling back to built-in rule-based extractor.');
+    } else {
+      logger.info(`OpenAI task extraction enabled (model: ${process.env.OPENAI_MODEL || 'gpt-4o-mini'}).`);
+    }
+  } else {
+    logger.info('AI task extraction using built-in rule-based heuristic extractor.');
   }
 };

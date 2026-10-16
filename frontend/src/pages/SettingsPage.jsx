@@ -378,6 +378,11 @@ export const SettingsPage = () => {
                 ? new Date(whatsappDiagnostics.lastSuccessfulSendAt).toLocaleString()
                 : 'No successful sends recorded'}
             </p>
+            {whatsappDiagnostics?.hostingCompatibilityMessage && (
+              <p className="text-danger" role="status">
+                <strong>Hosting requirement:</strong> {whatsappDiagnostics.hostingCompatibilityMessage}
+              </p>
+            )}
             {(whatsappDiagnosticsError || whatsappDiagnostics?.lastError) && (
               <p className="text-danger" role="status">
                 <strong>Error:</strong> {whatsappDiagnosticsError || whatsappDiagnostics.lastError}
@@ -411,10 +416,19 @@ export const SettingsPage = () => {
               variant="primary"
               icon={Send}
               isLoading={sendingTestWhatsApp}
-              disabled={!testRecipientConsented || !testWhatsAppNumber.trim()}
+              disabled={
+                !testRecipientConsented ||
+                !testWhatsAppNumber.trim() ||
+                whatsappDiagnostics?.sendingCapabilityStatus !== 'ready'
+              }
             >
               Send Test Message
             </Button>
+            {whatsappDiagnostics?.sendingCapabilityStatus !== 'ready' && (
+              <p className="text-muted" role="status">
+                Connect the Baileys account on the always-on backend before sending a test message.
+              </p>
+            )}
             <p className="text-muted">
               “Sent” means Baileys accepted the message. WhatsApp delivery confirmation is shown separately.
             </p>

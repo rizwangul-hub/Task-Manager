@@ -322,8 +322,8 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
  */
 export async function callGemini(apiKey, text, context, options = {}) {
   const primaryModel = options.model || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const customUrl = options.apiUrl || process.env.GEMINI_API_URL;
-  const modelsToAttempt = customUrl ? [primaryModel] : [primaryModel, 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  const explicitApiUrl = options.apiUrl;
+  const modelsToAttempt = explicitApiUrl ? [primaryModel] : [primaryModel, 'gemini-1.5-flash', 'gemini-2.0-flash'];
 
   const prompt = `You are an AI assistant in a task management system.
 Analyze the following WhatsApp message received in a team group.
@@ -356,7 +356,11 @@ Return ONLY a valid JSON object matching this schema:
   let lastError = null;
 
   for (const modelToTry of modelsToAttempt) {
-    const url = customUrl || `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:generateContent`;
+    const url = explicitApiUrl
+      ? explicitApiUrl
+      : (modelToTry === primaryModel && process.env.GEMINI_API_URL
+          ? process.env.GEMINI_API_URL
+          : `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:generateContent`);
 
     // Bounded retry loop for transient network/rate-limit issues
     for (let attempt = 0; attempt <= 2; attempt++) {

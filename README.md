@@ -29,7 +29,7 @@ Task-Manager/
 │   │   ├── utils/                # Date helpers and formatting
 │   │   ├── App.jsx               # Route tree with session guards
 │   │   └── main.jsx              # React root entry point
-│   ├── .env.example              # Frontend environment template
+│   ├── .env                      # Frontend environment configuration (git-ignored)
 │   ├── package.json              # Client scripts and dependencies
 │   └── vite.config.js            # Vite build configuration
 │
@@ -46,7 +46,7 @@ Task-Manager/
 │   │   ├── app.js                # Express application configuration
 │   │   └── server.js             # HTTP server listener and graceful shutdown
 │   ├── test/                     # Node.js native test suite
-│   ├── .env.example              # Backend environment template
+│   ├── .env                      # Backend environment configuration (git-ignored)
 │   └── package.json              # Server scripts and dependencies
 ├── Dockerfile                    # Production backend/frontend multi-stage images
 ├── docker-compose.yml            # Nginx, API, MongoDB, and Redis services
@@ -195,11 +195,10 @@ npm install
 ## Environment Configuration
 
 ### Backend Configuration
-Create a `.env` file inside `backend/` by copying `backend/.env.example`:
+Configure environment variables in `backend/.env` (kept private and git-ignored):
 
 ```bash
-cd backend
-cp .env.example .env
+# Edit backend/.env directly
 ```
 
 | Variable | Description | Default / Example |
@@ -254,11 +253,10 @@ The backend can also connect directly to WhatsApp using Baileys. Set `PIXX_WHATS
 The webhook responds with HTTP 200 after signature, payload, and group checks, then processes accepted messages asynchronously. Ensure the Node process remains running to finish queued in-process work. Message IDs are stored in a unique sparse index to suppress retries. The parser routes penalty/PCN messages to the `Penalty Charge Notice` board, bridging and stamp-duty messages to the `Urgent Matters` board and corresponding group, then uses `General Tasks` or `WHATSAPP_DEFAULT_PROJECT_ID` as fallback. It uses the first sentence (up to 80 characters) as the title, maps `@Name` to active board members, and otherwise assigns `WHATSAPP_DEFAULT_ASSIGNEE_ID` or the board manager. Sender metadata, group, task activity, and media are saved with the task. Images/documents are downloaded from the provider and uploaded to `pixx_tasks/whatsapp`; the first image is also attached to the task's preview and Updates thread. Active Admins/Managers, the board manager, and assignees receive in-app/socket and email notifications. If MongoDB automatic index creation is disabled, create the index before enabling intake with `db.tasks.createIndex({ whatsappMessageId: 1 }, { unique: true, sparse: true })`.
 
 ### Frontend Configuration
-Create a `.env` file inside `frontend/` by copying `frontend/.env.example`:
+Configure environment variables in `frontend/.env` (kept private and git-ignored):
 
 ```bash
-cd frontend
-cp .env.example .env
+# Edit frontend/.env directly
 ```
 
 | Variable | Description | Default |
@@ -468,7 +466,7 @@ npm test
 
 ### Container deployment (Docker Compose)
 
-1. Copy `.env.production.example` to `.env.production`. Set distinct strong `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` values, the MongoDB and Redis passwords/URLs, SMTP, Cloudinary, WhatsApp, and the real `FRONTEND_URL`.
+1. Create `.env.production` (kept private and git-ignored). Set distinct strong `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` values, the MongoDB and Redis passwords/URLs, SMTP, Cloudinary, WhatsApp, and the real `FRONTEND_URL`.
 2. Place the TLS certificate and private key at `deploy/certs/fullchain.pem` and `deploy/certs/privkey.pem`. The Nginx frontend redirects HTTP to HTTPS and listens on both ports; use certificates trusted by your clients.
 3. Build and start the services from the project root:
 

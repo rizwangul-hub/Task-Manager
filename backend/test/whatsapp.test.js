@@ -255,6 +255,37 @@ test('getWhatsAppDiagnostics returns safe operational shape without leaking toke
   assert.equal(diagnostics.keys, undefined);
 });
 
+test('WhatsApp diagnostics explain when Vercel serverless cannot host Baileys', async () => {
+  const previousVercel = process.env.VERCEL;
+  process.env.VERCEL = '1';
+  try {
+    let socketCreations = 0;
+    const service = createWhatsAppService({
+      authStateFactory: async () => ({
+        state: { creds: { registered: true } },
+        saveCreds: async () => {}
+      }),
+      socketFactory: () => {
+        socketCreations += 1;
+        return createMockBaileysSocket({ readyState: 1 });
+      },
+      serviceLogger: { info() {}, warn() {}, error() {} }
+    });
+    assert.equal(await service.initialize(), null);
+    const diagnostics = service.getDiagnostics();
+    assert.equal(diagnostics.hostingCompatibility, 'serverless_unsupported');
+    assert.match(diagnostics.hostingCompatibilityMessage, /persistent Node\.js process/);
+    assert.match(diagnostics.lastError, /Vercel serverless function/);
+    const sendResult = await service.sendWhatsAppTaskNotification('447123456789', 'Task assigned');
+    assert.equal(sendResult.retryable, true);
+    assert.match(sendResult.reason, /Vercel serverless function/);
+    assert.equal(socketCreations, 0);
+  } finally {
+    if (previousVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = previousVercel;
+  }
+});
+
 test('sendWhatsAppTaskNotification safely validates empty inputs and recipient format', async () => {
   // Empty text
   const emptyText = await sendWhatsAppTaskNotification('923255984244', '');

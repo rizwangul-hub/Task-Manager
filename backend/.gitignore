@@ -5,7 +5,14 @@ node_modules/
 .env
 .env.*
 *.env
-!.env.example
+
+# Private keys, certificates & credentials
+*.pem
+*.key
+*.cert
+*.crt
+credentials.json
+token.json
 
 # Baileys WhatsApp Auth Sessions & Keys
 auth_info_baileys/

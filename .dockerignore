@@ -2,7 +2,6 @@
 **/dist
 **/.env
 **/.env.*
-!.env.production.example
 .git
 deploy/certs
 *.log

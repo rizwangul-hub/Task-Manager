@@ -91,7 +91,8 @@ router.post('/test-message', ownerOnly, async (req, res, next) => {
     });
 
     if (!result.success) {
-      return res.status(400).json({
+      const statusCode = result.retryable ? 503 : 400;
+      return res.status(statusCode).json({
         status: 'fail',
         message: result.reason || result.error || 'Failed to send test message via connected WhatsApp account.',
         data: { result }
