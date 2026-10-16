@@ -9,6 +9,7 @@ import { whatsappService } from '../services/whatsappService';
 import { userService } from '../services/userService';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
+import Modal from '../components/ui/Modal';
 import {
   Settings,
   Save,
@@ -18,7 +19,15 @@ import {
   User as UserIcon,
   Phone,
   RefreshCw,
-  Send
+  Send,
+  Users,
+  Info,
+  Sparkles,
+  Play,
+  Pause,
+  FlaskConical,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 
 export const SettingsPage = () => {
@@ -38,6 +47,119 @@ export const SettingsPage = () => {
   const [testWhatsAppNumber, setTestWhatsAppNumber] = useState('');
   const [testRecipientConsented, setTestRecipientConsented] = useState(false);
   const [sendingTestWhatsApp, setSendingTestWhatsApp] = useState(false);
+
+  // WhatsApp Groups Monitoring State
+  const [monitoredGroups, setMonitoredGroups] = useState([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [togglingJid, setTogglingJid] = useState(null);
+
+  const fetchGroups = useCallback(async () => {
+    setLoadingGroups(true);
+    try {
+      const res = await whatsappService.getGroups();
+      setMonitoredGroups(res.data?.groups || []);
+    } catch {
+      // Best effort
+    } finally {
+      setLoadingGroups(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchGroups();
+  }, [fetchGroups]);
+
+  const handleToggleGroupMonitoring = async (group) => {
+    setTogglingJid(group.groupJid);
+    try {
+      const res = await whatsappService.toggleMonitoredGroup({
+        groupJid: group.groupJid,
+        groupName: group.groupName,
+        isMonitored: !group.isMonitored,
+        participantCount: group.participantCount
+      });
+      toast.success(res.message || 'Group monitoring updated.');
+      setMonitoredGroups((prev) =>
+        prev.map((g) =>
+          g.groupJid === group.groupJid ? { ...g, isMonitored: !group.isMonitored } : g
+        )
+      );
+    } catch (err) {
+      toast.error(err.message || 'Failed to update group monitoring.');
+    } finally {
+      setTogglingJid(null);
+    }
+  };
+
+  const handleTogglePause = async (group) => {
+    setTogglingJid(group.groupJid);
+    try {
+      const res = await whatsappService.toggleMonitoredGroup({
+        groupJid: group.groupJid,
+        groupName: group.groupName,
+        isMonitored: group.isMonitored,
+        isPaused: !group.isPaused,
+        participantCount: group.participantCount
+      });
+      toast.success(res.message || 'Group status updated.');
+      setMonitoredGroups((prev) =>
+        prev.map((g) =>
+          g.groupJid === group.groupJid ? { ...g, isPaused: !g.isPaused } : g
+        )
+      );
+    } catch (err) {
+      toast.error(err.message || 'Failed to update group pause status.');
+    } finally {
+      setTogglingJid(null);
+    }
+  };
+
+  // Gemini Test State
+  const [testingGemini, setTestingGemini] = useState(false);
+  const [geminiTestResult, setGeminiTestResult] = useState(null);
+
+  // Sample Message Test State
+  const [sampleModalOpen, setSampleModalOpen] = useState(false);
+  const [sampleMessageText, setSampleMessageText] = useState(
+    'Rizwan, please update the UK property expense tracker and finish the service charge report by tomorrow.'
+  );
+  const [sampleSenderName, setSampleSenderName] = useState('Manager');
+  const [sampleResult, setSampleResult] = useState(null);
+  const [testingSample, setTestingSample] = useState(false);
+
+  const handleTestGemini = async () => {
+    setTestingGemini(true);
+    setGeminiTestResult(null);
+    try {
+      const res = await whatsappService.testGemini();
+      setGeminiTestResult({ success: true, data: res.data });
+      toast.success(res.message || 'Google Gemini API is reachable and responding.');
+    } catch (err) {
+      setGeminiTestResult({ success: false, error: err.message || 'Gemini connectivity failed.' });
+      toast.error(err.message || 'Failed to connect to Google Gemini API.');
+    } finally {
+      setTestingGemini(false);
+    }
+  };
+
+  const handleRunSampleAnalysis = async (e) => {
+    if (e) e.preventDefault();
+    if (!sampleMessageText.trim()) return;
+    setTestingSample(true);
+    setSampleResult(null);
+    try {
+      const res = await whatsappService.testSampleMessage({
+        sampleMessage: sampleMessageText.trim(),
+        senderName: sampleSenderName.trim()
+      });
+      setSampleResult(res.data);
+      toast.success('Sample message analyzed with Gemini!');
+    } catch (err) {
+      toast.error(err.message || 'Failed to analyze sample message.');
+    } finally {
+      setTestingSample(false);
+    }
+  };
 
   useEffect(() => {
     if (user?.whatsappNumber !== undefined) {
@@ -297,6 +419,224 @@ export const SettingsPage = () => {
               “Sent” means Baileys accepted the message. WhatsApp delivery confirmation is shown separately.
             </p>
           </form>
+        </div>
+
+        {/* WhatsApp Task Capture & Group Monitoring Card */}
+        <div className="settings-card">
+          <div className="card-header">
+            <div className="card-header-title">
+              <Users size={18} className="card-title-icon" />
+              <h3>WhatsApp Task Capture (Group Monitoring)</h3>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <Button
+                variant="secondary"
+                size="small"
+                icon={Sparkles}
+                onClick={handleTestGemini}
+                isLoading={testingGemini}
+              >
+                Test Gemini API
+              </Button>
+              <Button
+                variant="secondary"
+                size="small"
+                icon={FlaskConical}
+                onClick={() => setSampleModalOpen(true)}
+              >
+                Test Sample Message
+              </Button>
+              <Button
+                variant="secondary"
+                size="small"
+                icon={RefreshCw}
+                onClick={fetchGroups}
+                isLoading={loadingGroups}
+              >
+                Refresh Groups
+              </Button>
+            </div>
+          </div>
+
+          <p className="card-description">
+            Select WhatsApp groups to actively monitor for task instructions. When incoming work messages are detected, the system will prepare drafts for your review in the <strong>WhatsApp Task Inbox</strong>. Tasks are never created without your explicit approval.
+          </p>
+
+          {geminiTestResult && (
+            <div
+              style={{
+                background: geminiTestResult.success ? '#f0fdf4' : '#fef2f2',
+                border: `1px solid ${geminiTestResult.success ? '#bbf7d0' : '#fecaca'}`,
+                borderRadius: '8px',
+                padding: '0.75rem 1rem',
+                marginBottom: '1rem',
+                fontSize: '0.875rem',
+                color: geminiTestResult.success ? '#166534' : '#991b1b',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              {geminiTestResult.success ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+              <div style={{ flex: 1 }}>
+                <strong>{geminiTestResult.success ? 'Gemini API Connected:' : 'Gemini API Error:'}</strong>{' '}
+                {geminiTestResult.success
+                  ? `Model responded successfully (${geminiTestResult.data?.model || 'gemini-2.5-flash'}) with latency ${geminiTestResult.data?.latencyMs || 0}ms.`
+                  : (geminiTestResult.error || 'Failed to connect')}
+              </div>
+              <button
+                type="button"
+                onClick={() => setGeminiTestResult(null)}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'inherit', fontWeight: 'bold' }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          <div
+            style={{
+              background: 'var(--bg-subtle, #f8fafc)',
+              border: '1px solid var(--border-color, #e2e8f0)',
+              borderRadius: '8px',
+              padding: '0.75rem 1rem',
+              marginBottom: '1rem',
+              fontSize: '0.85rem',
+              color: '#475569',
+              display: 'flex',
+              gap: '0.5rem',
+              alignItems: 'flex-start'
+            }}
+          >
+            <Info size={16} style={{ marginTop: '2px', flexShrink: 0, color: '#3b82f6' }} />
+            <div>
+              <strong>Baileys Connection Notice & Limitations:</strong> Incoming messages are captured in real-time while the server connection is connected. Messages sent prior to enabling or while offline cannot be guaranteed without full session sync. Message edits or ephemeral timer changes follow standard WhatsApp multi-device behavior.
+            </div>
+          </div>
+
+          {loadingGroups ? (
+            <p className="text-muted">Discovering WhatsApp groups from active session...</p>
+          ) : monitoredGroups.length === 0 ? (
+            <div style={{ padding: '1.5rem', textAlign: 'center', background: 'var(--bg-subtle, #f8fafc)', borderRadius: '8px' }}>
+              <p className="text-muted" style={{ margin: 0 }}>
+                No groups found. Ensure your WhatsApp account is paired, connected, and belongs to at least one group chat.
+              </p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)', textAlign: 'left', color: '#64748b' }}>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Group Name</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Group JID</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Members</th>
+                    <th style={{ padding: '0.75rem 0.5rem' }}>Last Activity</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'center' }}>Status</th>
+                    <th style={{ padding: '0.75rem 0.5rem', textAlign: 'center' }}>Monitoring Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monitoredGroups.map((group) => {
+                    const isToggling = togglingJid === group.groupJid;
+                    return (
+                      <tr key={group.groupJid} style={{ borderBottom: '1px solid var(--border-color, #f1f5f9)' }}>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 500 }}>
+                          {group.groupName}
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', fontFamily: 'monospace', color: '#64748b', fontSize: '0.8rem' }}>
+                          {group.groupJid}
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', color: '#64748b' }}>
+                          {group.participantCount || 0}
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', color: '#64748b', fontSize: '0.8rem' }}>
+                          {group.lastMessageAt ? new Date(group.lastMessageAt).toLocaleString() : 'No messages yet'}
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'center' }}>
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              background: !group.isMonitored
+                                ? '#f1f5f9'
+                                : group.isPaused
+                                  ? '#fef3c7'
+                                  : '#dcfce7',
+                              color: !group.isMonitored
+                                ? '#64748b'
+                                : group.isPaused
+                                  ? '#b45309'
+                                  : '#15803d'
+                            }}
+                          >
+                            {!group.isMonitored
+                              ? 'DISABLED'
+                              : group.isPaused
+                                ? 'PAUSED'
+                                : 'ACTIVE'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.75rem 0.5rem', textAlign: 'center' }}>
+                          <div style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center' }}>
+                            {group.isMonitored && (
+                              <button
+                                type="button"
+                                onClick={() => handleTogglePause(group)}
+                                disabled={isToggling}
+                                title={group.isPaused ? 'Resume monitoring' : 'Pause monitoring'}
+                                style={{
+                                  padding: '0.25rem 0.6rem',
+                                  borderRadius: '4px',
+                                  border: '1px solid #cbd5e1',
+                                  background: '#ffffff',
+                                  cursor: isToggling ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.75rem',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  color: '#334155'
+                                }}
+                              >
+                                {group.isPaused ? <Play size={12} /> : <Pause size={12} />}
+                                {group.isPaused ? 'Resume' : 'Pause'}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleToggleGroupMonitoring(group)}
+                              disabled={isToggling}
+                              style={{
+                                padding: '0.25rem 0.75rem',
+                                borderRadius: '20px',
+                                border: 'none',
+                                cursor: isToggling ? 'not-allowed' : 'pointer',
+                                fontWeight: 600,
+                                fontSize: '0.75rem',
+                                background: group.isMonitored ? '#ef4444' : '#16a34a',
+                                color: '#ffffff',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              {isToggling
+                                ? 'Saving...'
+                                : group.isMonitored
+                                  ? 'DISABLE'
+                                  : 'ENABLE'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Notification Preferences Card */}
@@ -565,9 +905,147 @@ export const SettingsPage = () => {
                 label={whatsappDiagnostics?.connectionStatus?.toUpperCase() || 'DISCONNECTED'}
               />
             </div>
+
+            <div className="diagnostic-row">
+              <div className="diagnostic-label-col">
+                <span className="diagnostic-title">Google Gemini AI Engine</span>
+                <span className="diagnostic-desc">REST generateContent model pipeline</span>
+              </div>
+              <StatusBadge
+                status={geminiTestResult?.success ? 'healthy' : 'pending'}
+                label={geminiTestResult?.success ? 'ONLINE' : 'CONFIGURED'}
+              />
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Sample Message Test Modal */}
+      <Modal
+        isOpen={sampleModalOpen}
+        onClose={() => setSampleModalOpen(false)}
+        title="Test WhatsApp Group Message Analysis (Gemini)"
+        maxWidth="650px"
+      >
+        <form onSubmit={handleRunSampleAnalysis} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <p style={{ fontSize: '0.875rem', color: '#64748b', margin: 0 }}>
+            Enter a sample WhatsApp group message to test Gemini AI's real-time structured task extraction before processing live incoming messages.
+          </p>
+
+          <FormField
+            id="sample-sender-name"
+            label="Sender Name"
+            type="text"
+            value={sampleSenderName}
+            onChange={(e) => setSampleSenderName(e.target.value)}
+            placeholder="e.g. Manager"
+            required
+          />
+
+          <div>
+            <label className="form-label" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>
+              WhatsApp Message Content *
+            </label>
+            <textarea
+              className="form-input"
+              rows={4}
+              value={sampleMessageText}
+              onChange={(e) => setSampleMessageText(e.target.value)}
+              placeholder="e.g. Rizwan, please update the UK property expense tracker and finish the service charge report by tomorrow."
+              style={{
+                width: '100%',
+                padding: '0.5rem',
+                borderRadius: '6px',
+                border: '1px solid var(--border-color, #cbd5e1)',
+                fontFamily: 'inherit',
+                fontSize: '0.875rem'
+              }}
+              required
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setSampleModalOpen(false)}
+              disabled={testingSample}
+            >
+              Close
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              icon={Sparkles}
+              isLoading={testingSample}
+            >
+              Analyze with Gemini
+            </Button>
+          </div>
+        </form>
+
+        {sampleResult && (
+          <div
+            style={{
+              marginTop: '1.25rem',
+              padding: '1rem',
+              background: 'var(--bg-subtle, #f8fafc)',
+              border: '1px solid var(--border-color, #e2e8f0)',
+              borderRadius: '8px',
+              fontSize: '0.875rem'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span style={{ fontWeight: 600, color: '#334155' }}>Gemini AI Extraction Output</span>
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  background: sampleResult.isTask ? '#dcfce7' : '#fee2e2',
+                  color: sampleResult.isTask ? '#15803d' : '#b91c1c'
+                }}
+              >
+                {sampleResult.isTask ? 'TASK DETECTED' : 'NOT A TASK'}
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <div><strong>Confidence:</strong> {Math.round((sampleResult.confidence || 0) * 100)}%</div>
+              <div><strong>Priority:</strong> {sampleResult.priority || 'Medium'}</div>
+              <div><strong>Candidate Assignee:</strong> {sampleResult.assigneeName || 'None'}</div>
+              <div><strong>Due Date:</strong> {sampleResult.dueDate ? new Date(sampleResult.dueDate).toLocaleDateString() : 'None'}</div>
+            </div>
+
+            {sampleResult.title && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <strong>Generated Title:</strong>
+                <p style={{ margin: '0.25rem 0 0', color: '#1e293b', fontWeight: 500 }}>{sampleResult.title}</p>
+              </div>
+            )}
+
+            {sampleResult.description && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <strong>Description:</strong>
+                <p style={{ margin: '0.25rem 0 0', color: '#475569' }}>{sampleResult.description}</p>
+              </div>
+            )}
+
+            {sampleResult.reason && (
+              <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#64748b' }}>
+                <strong>Reasoning:</strong> {sampleResult.reason}
+              </div>
+            )}
+
+            {sampleResult.modelUsed && (
+              <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#94a3b8' }}>
+                Model: <code>{sampleResult.modelUsed}</code>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </PageContainer>
   );
 };

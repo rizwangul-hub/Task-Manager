@@ -13,7 +13,8 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
-  Sparkles
+  Sparkles,
+  Inbox
 } from 'lucide-react';
 
 export const Sidebar = ({
@@ -28,6 +29,7 @@ export const Sidebar = ({
     { label: 'Dashboard', path: '/', icon: LayoutDashboard },
     { label: 'My Work', path: '/my-work', icon: CheckSquare },
     { label: 'All Tasks', path: '/all-tasks', icon: ListTodo },
+    { label: 'WhatsApp Inbox', path: '/whatsapp-inbox', icon: Inbox },
     { label: 'Projects', path: '/projects', icon: FolderKanban },
     { label: 'Contacts', path: '/contacts', icon: ContactRound },
     { label: 'Calendar', path: '/calendar', icon: Calendar },

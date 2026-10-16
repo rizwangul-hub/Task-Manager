@@ -73,6 +73,75 @@ Tasks created from the All Tasks form require an active contact. Reassigning a t
 
 ---
 
+## WhatsApp Group Messages → AI Task Drafts → Manual Approval
+
+The system captures incoming task and work instructions from selected WhatsApp groups and generates structured task drafts.
+
+### Core Architecture & Guiding Principle
+- **Zero Automatic Task Creation:** A task is **never** created directly from an incoming WhatsApp message. Every detected instruction is stored as a draft that requires explicit owner review and approval via **"Approve & Create Task"**.
+- **Single-User Workspace:** Group participants are external contacts, not system users. All drafts and approvals are managed solely by the authenticated workspace owner.
+
+### 1. How to Configure the AI Provider (Google Gemini API & Heuristics)
+The system includes a production-ready extraction pipeline:
+- **Google Gemini API (Official REST Integration):**
+  - Uses the official REST endpoint: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`
+  - Authentication header: `x-goog-api-key: <GEMINI_API_KEY>`
+  - Google Cloud Project Number: `1061431060123` (`GOOGLE_CLOUD_PROJECT_NUMBER`)
+  - Configurable in `backend/.env`:
+    ```bash
+    AI_PROVIDER=gemini
+    GEMINI_API_KEY=your_gemini_api_key_here
+    GEMINI_MODEL=gemini-2.5-flash
+    GEMINI_API_URL=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+    GOOGLE_CLOUD_PROJECT_NUMBER=1061431060123
+    ```
+  - **Dynamic Model Fallback:** If `gemini-2.5-flash` returns HTTP 404 on accounts where it is not yet provisioned, the backend automatically falls back to `gemini-1.5-flash` and `gemini-2.0-flash`.
+  - **Bounded Exponential Backoff:** Automatically retries transient HTTP 429 and 503 errors while fast-failing on 400/401/403 errors.
+  - **Interactive Testing in UI:** Use the **"Test Gemini API"** button in **Settings** -> **WhatsApp Task Capture** to verify connectivity, or use **"Test Sample Message"** to test structured extraction without waiting for live WhatsApp messages.
+- **OpenAI:** Set `AI_PROVIDER=openai`, `OPENAI_API_KEY=your_key`, and optionally `OPENAI_MODEL=gpt-4o-mini` in `backend/.env`.
+- **Heuristic Rule-Based Extractor (Fallback):** Functions immediately with zero external credentials or API keys. Uses pattern matching, relative date parsing (e.g. "by Monday", "tomorrow"), priority detection, and project name matching against existing workspace projects. If an external AI provider fails or credentials are omitted, the pipeline falls back automatically to heuristic extraction without halting the Baileys listener.
+
+### 2. How to Select and Monitor WhatsApp Groups
+1. Navigate to **Settings** -> **WhatsApp Task Capture (Group Monitoring)**.
+2. Click **Refresh Groups** to retrieve all group chats accessible to your connected Baileys multi-device session.
+3. Toggle the monitoring switch on the groups you wish to monitor. Only explicitly enabled groups (`isMonitored: true`) are processed. Non-group messages, private chats, status broadcasts, and outgoing messages are ignored.
+4. Configuration is stored in MongoDB and persists across backend restarts.
+
+### 3. How to Review and Approve Drafts
+1. Navigate to the sidebar page: **WhatsApp Task Inbox** (`/whatsapp-inbox`).
+2. Drafts are displayed with status pills: `Awaiting Review`, `Needs Clarification`, `Approved`, `Rejected`, `Failed`.
+3. Click **Review & Approve** on any draft card to inspect the original WhatsApp message, copy message text, or redact raw message text for privacy compliance.
+4. Modify any candidate fields: Title, Description, Project, Priority, Start Date, and Due Date.
+5. Click **Approve & Create Task**: Atomically creates the task in the database, transitions the draft status to `Approved`, links the created task, and emits real-time updates via Socket.IO.
+6. Alternatively, click **Reject Draft** to discard unwanted messages without creating a task.
+
+### 4. How Duplicate Prevention Works
+- **Unique Compound Index:** MongoDB enforces a unique index on `{ groupJid: 1, messageId: 1 }` in the `TaskDraft` collection. Repeated deliveries of the same message event cannot create duplicate drafts.
+- **Durable Processing Record:** The draft record is stored in MongoDB *before* initiating AI analysis, ensuring recovery even if the server restarts.
+- **Atomic Approval Transition:** Approving a draft uses `TaskDraft.findOneAndUpdate({ _id, status: { $ne: 'approved' } })`. Double-clicking or retrying returns the existing created task and guarantees duplicate tasks are never created.
+
+### 5. Troubleshooting Disconnected WhatsApp Sessions
+- In **Settings**, check the WhatsApp connection status badge.
+- If disconnected, Baileys will attempt automatic exponential reconnects.
+- If the session was logged out on your phone, restart the backend and scan the terminal QR code to re-pair.
+- Authentication credentials persist in `./auth_info_baileys`. Never commit or delete these session files.
+
+### 6. Known Baileys Multi-Device Limitations
+- **Real-time Event Stream:** Messages are received while the Baileys socket is connected. Messages sent during extended offline periods depend on WhatsApp multi-device offline sync buffers.
+- **Group Metadata:** Baileys fetches participating groups on socket open; newly created WhatsApp groups will appear after clicking "Refresh Groups".
+- **Message Edits & Revocations:** Incoming messages capture the text sent at delivery. Message deletions ("Delete for Everyone") do not automatically delete already generated drafts.
+- **Privacy & Compliance:** Only monitor groups where members have consented to automated task extraction. Use the "Redact" button in the review modal to remove sensitive raw message text while keeping audit metadata.
+
+### 7. How to Test Safely
+1. Create a consenting WhatsApp test group containing your connected WhatsApp number.
+2. Enable the test group in **Settings** -> **WhatsApp Task Capture**.
+3. Send a sample instruction: `"Rizwan, please update the UK property expense tracker and finish the service charge report by Monday."`
+4. Verify the draft appears in `/whatsapp-inbox` with interpreted dates and suggested project.
+5. Review and approve the draft to verify task creation on your board.
+
+
+---
+
 ## User Roles & Permissions
 
 The platform enforces strict role-based access control (RBAC) across backend endpoints and frontend interfaces:

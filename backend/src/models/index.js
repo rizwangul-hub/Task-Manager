@@ -13,6 +13,8 @@ import {
 import { NotificationOutbox, OUTBOX_STATUSES } from './notificationOutbox.model.js';
 import { Contact } from './contact.model.js';
 import { TaskWhatsAppNotification, TASK_WHATSAPP_STATUSES } from './taskWhatsAppNotification.model.js';
+import { MonitoredGroup } from './monitoredGroup.model.js';
+import { TaskDraft, TASK_DRAFT_STATUSES } from './taskDraft.model.js';
 
 export const MODEL_NAMES = {
   USER: 'User',
@@ -25,6 +27,8 @@ export const MODEL_NAMES = {
   NOTIFICATION_OUTBOX: 'NotificationOutbox',
   CONTACT: 'Contact',
   TASK_WHATSAPP_NOTIFICATION: 'TaskWhatsAppNotification',
+  MONITORED_GROUP: 'MonitoredGroup',
+  TASK_DRAFT: 'TaskDraft',
   INTEGRATION_MESSAGE: 'IntegrationMessage'
 };
 
@@ -49,7 +53,10 @@ export {
   OUTBOX_STATUSES,
   Contact,
   TaskWhatsAppNotification,
-  TASK_WHATSAPP_STATUSES
+  TASK_WHATSAPP_STATUSES,
+  MonitoredGroup,
+  TaskDraft,
+  TASK_DRAFT_STATUSES
 };
 
 export default {
@@ -74,5 +81,9 @@ export default {
   Contact,
   TaskWhatsAppNotification,
   TASK_WHATSAPP_STATUSES,
+  MonitoredGroup,
+  TaskDraft,
+  TASK_DRAFT_STATUSES,
   MODEL_NAMES
 };
+

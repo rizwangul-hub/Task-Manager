@@ -35,11 +35,35 @@ const redactPhoneNumber = (value) => String(value || '').replace(/\+?\d[\d\s().-
 const redactError = (error) => redactPhoneNumber(error?.message || error || 'Unknown WhatsApp error')
   .replace(/[0-9a-fA-F]{24,}/g, '[REDACTED_ID]');
 
+export function extractFullMessageText(msg) {
+  if (!msg || !msg.message) return '';
+  const m = msg.message;
+
+  const content =
+    m.ephemeralMessage?.message ||
+    m.viewOnceMessage?.message ||
+    m.viewOnceMessageV2?.message ||
+    m.documentWithCaptionMessage?.message ||
+    m;
+
+  const text =
+    content.conversation ||
+    content.extendedTextMessage?.text ||
+    content.imageMessage?.caption ||
+    content.videoMessage?.caption ||
+    content.documentMessage?.caption ||
+    content.documentWithCaptionMessage?.message?.documentMessage?.caption ||
+    '';
+
+  return String(text || '').trim();
+}
+
 let defaultWhatsAppService = null;
 
 export function getWhatsAppSocket() {
   return defaultWhatsAppService?.getSocket() || null;
 }
+
 
 export const createWhatsAppService = ({
   socketFactory = makeWASocket,
@@ -183,6 +207,112 @@ export const createWhatsAppService = ({
             serviceLogger.error(`[WA_DELIVERY_RECEIPT] Could not persist message receipt: ${lastError}`);
           });
         });
+
+        newSock.ev.on('messages.upsert', async ({ messages, type }) => {
+          if (type !== 'notify' || !Array.isArray(messages)) return;
+
+          for (const msg of messages) {
+            try {
+              if (msg.key?.fromMe) continue;
+              const remoteJid = msg.key?.remoteJid || '';
+              if (!remoteJid.endsWith('@g.us')) continue;
+              if (remoteJid === 'status@broadcast') continue;
+
+              const messageText = extractFullMessageText(msg);
+              if (!messageText) continue;
+
+              const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+              const monitored = await MonitoredGroup.findOne({ groupJid: remoteJid, isMonitored: true });
+              if (!monitored || monitored.isPaused) continue;
+
+              const messageId = msg.key?.id;
+              if (!messageId) continue;
+
+              const senderJid = msg.key?.participant || msg.participant || remoteJid;
+              const senderName = msg.pushName || '';
+              const messageTimestamp = new Date(
+                (Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000
+              );
+
+              await MonitoredGroup.updateOne(
+                { groupJid: remoteJid },
+                { $set: { lastMessageAt: messageTimestamp } }
+              );
+
+              const { TaskDraft, TASK_DRAFT_STATUSES } = await import('../models/taskDraft.model.js');
+
+              // Deduplication: check if already exists
+              const existing = await TaskDraft.findOne({ groupJid: remoteJid, messageId });
+              if (existing) {
+                serviceLogger.info(`[WA_INBOUND_DUP] Message ${messageId} in ${remoteJid} already drafted; skipping.`);
+                continue;
+              }
+
+              // Create durable processing record before AI
+              let draft;
+              try {
+                draft = await TaskDraft.create({
+                  groupJid: remoteJid,
+                  groupName: monitored.groupName || '',
+                  messageId,
+                  senderJid,
+                  senderName,
+                  messageTimestamp,
+                  rawMessageText: messageText,
+                  status: TASK_DRAFT_STATUSES.AWAITING_REVIEW,
+                  attempts: 1
+                });
+              } catch (createErr) {
+                if (createErr.code === 11000) {
+                  serviceLogger.info(`[WA_INBOUND_DUP_INDEX] Concurrent duplicate prevented for message ${messageId}.`);
+                  continue;
+                }
+                throw createErr;
+              }
+
+              serviceLogger.info(`[WA_INBOUND_DRAFT_CREATED] Draft recorded for message ${messageId} from ${senderName || senderJid}`);
+
+              // Non-blocking background AI task extraction
+              void (async () => {
+                try {
+                  const { extractTaskFromWhatsAppMessage } = await import('./aiTaskExtraction.service.js');
+                  const { extraction, provider } = await extractTaskFromWhatsAppMessage(messageText, {
+                    senderName,
+                    messageTimestamp
+                  });
+
+                  let newStatus = TASK_DRAFT_STATUSES.AWAITING_REVIEW;
+                  if (!extraction.isTask) {
+                    newStatus = TASK_DRAFT_STATUSES.IGNORED;
+                  } else if (extraction.missingInformation?.length > 0 || extraction.confidence < 0.6) {
+                    newStatus = TASK_DRAFT_STATUSES.NEEDS_CLARIFICATION;
+                  }
+
+                  draft.aiExtraction = extraction;
+                  draft.status = newStatus;
+                  draft.extractorProvider = provider;
+                  await draft.save();
+
+                  serviceLogger.info(`[WA_INBOUND_AI_DONE] Extracted task draft for ${messageId} using ${provider} (status: ${newStatus}).`);
+
+                  const { socketService } = await import('./socket.service.js');
+                  socketService.broadcast('whatsapp:draft_created', draft);
+                } catch (aiErr) {
+                  serviceLogger.error(`[WA_INBOUND_AI_ERROR] Extraction error for ${messageId}: ${aiErr.message}`);
+                  draft.status = TASK_DRAFT_STATUSES.FAILED;
+                  draft.processingError = aiErr.message || 'AI task extraction failed';
+                  await draft.save().catch(() => {});
+
+                  const { socketService } = await import('./socket.service.js');
+                  socketService.broadcast('whatsapp:draft_created', draft);
+                }
+              })();
+            } catch (err) {
+              serviceLogger.error(`[WA_INBOUND_ERROR] Failed to process message in Baileys: ${err.message}`);
+            }
+          }
+        });
+
 
         newSock.ev.on('connection.update', (update) => {
           if (instanceSock !== newSock) return;
@@ -392,11 +522,33 @@ export const createWhatsAppService = ({
     lastError: lastError ? redactError(lastError) : null
   });
 
+  const getParticipatingGroups = async () => {
+    if (!isReady()) {
+      return { success: false, reason: 'WhatsApp socket is not connected', groups: [] };
+    }
+    try {
+      const groupData = await instanceSock.groupFetchAllParticipating();
+      const groups = Object.values(groupData || {}).map((g) => ({
+        id: g.id,
+        subject: g.subject || 'Unnamed Group',
+        creation: g.creation ? new Date(g.creation * 1000) : null,
+        owner: g.owner || null,
+        size: Array.isArray(g.participants) ? g.participants.length : 0,
+        desc: g.desc || ''
+      }));
+      return { success: true, groups };
+    } catch (err) {
+      serviceLogger.error(`[WA_GROUPS_ERROR] Failed to fetch participating groups: ${err.message}`);
+      return { success: false, error: err.message, groups: [] };
+    }
+  };
+
   return {
     initialize,
     close,
     sendWhatsAppTaskNotification,
     getDiagnostics,
+    getParticipatingGroups,
     getSocket: () => instanceSock,
     normalizeWhatsAppPhoneNumber
   };
@@ -412,4 +564,6 @@ export const sendWhatsAppTaskNotification = (...args) =>
 export const sendWhatsAppMessage = async (...args) =>
   (await whatsappService.sendWhatsAppTaskNotification(...args)).success;
 export const getWhatsAppDiagnostics = () => whatsappService.getDiagnostics();
+export const getParticipatingGroups = () => whatsappService.getParticipatingGroups();
 export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber };
+

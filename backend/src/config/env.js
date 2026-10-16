@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { logger } from '../utils/logger.js';
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const envPath = process.env.DOTENV_CONFIG_PATH || process.env.ENV_FILE || resolve(backendRoot, '.env');
 if (process.env.NODE_ENV !== 'test') {
-  dotenv.config({ path: resolve(backendRoot, '.env') });
+  dotenv.config({ path: envPath });
 }
 
 const exampleJwtSecrets = new Set([
@@ -139,6 +140,13 @@ export const env = {
   WHATSAPP: {
     authInfoPath: process.env.AUTH_INFO_PATH || './auth_info_baileys',
     maxMediaBytes: parseInt(process.env.WHATSAPP_MAX_MEDIA_BYTES, 10) || 10 * 1024 * 1024
+  },
+  GEMINI: {
+    apiKey: process.env.GEMINI_API_KEY || '',
+    apiUrl: process.env.GEMINI_API_URL || '',
+    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    projectNumber: process.env.GOOGLE_CLOUD_PROJECT_NUMBER || '1061431060123',
+    isConfigured: Boolean(process.env.GEMINI_API_KEY)
   }
 };
 

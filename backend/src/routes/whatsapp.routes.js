@@ -6,6 +6,7 @@ import {
   sendWhatsAppTaskNotification,
   normalizeWhatsAppPhoneNumber
 } from '../services/whatsappService.js';
+import { whatsappDraftController } from '../controllers/whatsappDraft.controller.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 const router = Router();
@@ -13,12 +14,13 @@ const router = Router();
 // Require authentication for all WhatsApp integration endpoints
 router.use(authenticate);
 
+const ownerOnly = authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER);
+
 /**
+ * Diagnostics & Connection
  * GET /api/whatsapp/diagnostics
- * Returns the status of the WhatsApp provider, connection, and capabilities.
- * Safe and sanitized: no tokens, cookies, or secrets exposed.
  */
-router.get('/diagnostics', authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER), (req, res) => {
+router.get('/diagnostics', ownerOnly, (req, res) => {
   const diagnostics = getWhatsAppDiagnostics();
   res.status(200).json({
     status: 'success',
@@ -27,10 +29,38 @@ router.get('/diagnostics', authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER), (req
 });
 
 /**
+ * WhatsApp Group Monitoring
+ * GET /api/whatsapp/groups
+ * POST /api/whatsapp/monitored-groups
+ */
+router.get('/groups', ownerOnly, whatsappDraftController.getGroups);
+router.post('/monitored-groups', ownerOnly, whatsappDraftController.toggleMonitoredGroup);
+router.post('/test-gemini', ownerOnly, whatsappDraftController.testGemini);
+router.post('/test-sample-message', ownerOnly, whatsappDraftController.testSampleMessage);
+
+/**
+ * Task Drafts CRUD & Pipeline Actions
+ * GET /api/whatsapp/drafts
+ * GET /api/whatsapp/drafts/:id
+ * PUT /api/whatsapp/drafts/:id
+ * POST /api/whatsapp/drafts/:id/approve
+ * POST /api/whatsapp/drafts/:id/reject
+ * POST /api/whatsapp/drafts/:id/retry
+ * DELETE /api/whatsapp/drafts/:id/raw-message
+ */
+router.get('/drafts', ownerOnly, whatsappDraftController.getDrafts);
+router.get('/drafts/:id', ownerOnly, whatsappDraftController.getDraftById);
+router.put('/drafts/:id', ownerOnly, whatsappDraftController.updateDraft);
+router.post('/drafts/:id/approve', ownerOnly, whatsappDraftController.approveDraft);
+router.post('/drafts/:id/reject', ownerOnly, whatsappDraftController.rejectDraft);
+router.post('/drafts/:id/retry', ownerOnly, whatsappDraftController.retryDraft);
+router.delete('/drafts/:id/raw-message', ownerOnly, whatsappDraftController.deleteRawMessage);
+
+/**
  * POST /api/whatsapp/test-message
  * Sends a test message to a specified verified test number using the connected sender account.
  */
-router.post('/test-message', authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER), async (req, res, next) => {
+router.post('/test-message', ownerOnly, async (req, res, next) => {
   const { testNumber } = req.body || {};
 
   if (!testNumber || typeof testNumber !== 'string' || !testNumber.trim()) {
@@ -40,14 +70,16 @@ router.post('/test-message', authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER), as
   const cleanDigits = normalizeWhatsAppPhoneNumber(testNumber.trim());
   const isJid = testNumber.trim().endsWith('@s.whatsapp.net') || testNumber.trim().endsWith('@g.us');
   if (!cleanDigits && !isJid) {
-    return next(new AppError('Invalid phone number. Please provide a valid number with country code (e.g. 923255984244).', 400));
+    return next(
+      new AppError('Invalid phone number. Please provide a valid number with country code (e.g. 923255984244).', 400)
+    );
   }
 
   const messageText = [
     '🔔 *PixxTechnologiees Task Manager — WhatsApp Integration Test*',
     '',
     'This is a verified test message sent from your connected WhatsApp account.',
-    'Automated task assignment alerts are active and functional.',
+    'Automated task assignment alerts and group monitoring are active.',
     '',
     `Sent at: ${new Date().toLocaleString()}`,
     '_PixxTechnologiees Workspace_'

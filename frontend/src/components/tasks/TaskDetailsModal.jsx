@@ -461,6 +461,13 @@ export const TaskDetailsModal = ({
               </span>
             </div>
 
+            {task.source === 'WhatsApp' && (
+              <div className="quickbar-item" style={{ background: '#dcfce7', color: '#15803d', padding: '0.2rem 0.5rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <MessageSquare size={13} />
+                <span>Created from WhatsApp</span>
+              </div>
+            )}
+
             <div className="quickbar-item">
               <Clock size={15} className="quickbar-icon" />
               <span>{formatMinutesToHours(task.totalTimeSpentMinutes)} logged</span>
@@ -547,6 +554,33 @@ export const TaskDetailsModal = ({
                   )}
                 </div>
               </div>
+
+              {task.source === 'WhatsApp' && (
+                <div className="overview-section">
+                  <h4 className="section-label" style={{ color: '#15803d', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <MessageSquare size={15} />
+                    Created from WhatsApp
+                  </h4>
+                  <div className="task-desc-box" style={{ background: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                    <p style={{ margin: '0 0 0.25rem 0' }}>
+                      <strong>Source Group:</strong> {task.groupName || task.sourceMetadata?.groupName || 'Monitored WhatsApp Group'}
+                    </p>
+                    <p style={{ margin: '0 0 0.25rem 0' }}>
+                      <strong>Sender:</strong> {task.whatsappSender?.name || task.sourceMetadata?.senderName || 'Team Member'} {task.whatsappSender?.phone ? `(${task.whatsappSender.phone})` : ''}
+                    </p>
+                    {task.whatsappSender?.sentAt && (
+                      <p style={{ margin: '0 0 0.25rem 0' }}>
+                        <strong>Received At:</strong> {formatDateTime(task.whatsappSender.sentAt)}
+                      </p>
+                    )}
+                    {task.sourceMetadata?.rawMessageText && (
+                      <div style={{ marginTop: '0.5rem', background: '#ffffff', padding: '0.5rem', borderRadius: '4px', border: '1px solid #dcfce7', fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                        "{task.sourceMetadata.rawMessageText}"
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="overview-section">
                 <h4 className="section-label">Assignment & WhatsApp History</h4>

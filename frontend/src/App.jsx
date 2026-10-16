@@ -17,6 +17,7 @@ import NotificationsPage from './pages/NotificationsPage';
 import SettingsPage from './pages/SettingsPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ContactsPage from './pages/ContactsPage';
+import WhatsAppInboxPage from './pages/WhatsAppInboxPage';
 import { Navigate } from 'react-router-dom';
 
 function App() {
@@ -42,6 +43,7 @@ function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="my-work" element={<MyWorkPage />} />
                 <Route path="all-tasks" element={<AllTasksPage />} />
+                <Route path="whatsapp-inbox" element={<WhatsAppInboxPage />} />
                 <Route path="projects" element={<ProjectsPage />} />
                 <Route path="contacts" element={<ContactsPage />} />
                 <Route path="calendar" element={<CalendarPage />} />

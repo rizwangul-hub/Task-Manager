@@ -159,7 +159,19 @@ export const socketService = {
         }
       }
     });
+  },
+
+  getIO: () => io,
+
+  broadcast: (eventName, payload) => {
+    if (!io || !eventName) return;
+    try {
+      io.emit(eventName, payload);
+    } catch (err) {
+      logger.error(`Failed to broadcast ${eventName}:`, err);
+    }
   }
 };
 
 export default socketService;
+

@@ -109,6 +109,16 @@ const taskSchema = new mongoose.Schema(
       trim: true,
       default: undefined
     },
+    whatsappDraftId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaskDraft',
+      default: null,
+      index: true
+    },
+    sourceMetadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null
+    },
     whatsappSender: {
       phone: { type: String, trim: true, default: '' },
       name: { type: String, trim: true, default: '' },
