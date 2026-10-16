@@ -1,7 +1,7 @@
 import { Comment } from '../models/comment.model.js';
 import { Notification } from '../models/notification.model.js';
 import { NotificationOutbox } from '../models/notificationOutbox.model.js';
-import { Task } from '../models/task.model.js';
+import { Task, TASK_SOURCES } from '../models/task.model.js';
 import { TaskDraft } from '../models/taskDraft.model.js';
 import { TaskEvent } from '../models/taskEvent.model.js';
 import { TaskWhatsAppNotification } from '../models/taskWhatsAppNotification.model.js';
@@ -14,7 +14,7 @@ const CHECKPOINT_KEY = 'inbound';
 
 export const whatsappImportedTaskFilter = {
   $or: [
-    { source: 'WhatsApp' },
+    { source: TASK_SOURCES.WHATSAPP },
     { whatsappMessageId: { $type: 'string' } },
     { whatsappDraftId: { $ne: null } },
     { 'sourceMetadata.groupJid': { $type: 'string' } },

@@ -5,7 +5,9 @@ import {
   sendWhatsAppMessage,
   sendWhatsAppTaskNotification,
   createWhatsAppService,
-  getWhatsAppDiagnostics
+  getWhatsAppDiagnostics,
+  getWhatsAppMessageTimestamp,
+  isAfterWhatsAppProcessingCheckpoint
 } from '../src/services/whatsappService.js';
 import { whatsappWebhookController } from '../src/controllers/whatsappWebhook.controller.js';
 
@@ -55,6 +57,12 @@ const createMockedWhatsAppService = ({
     },
     sendReadyTimeoutMs: 10,
     reconnectDelaysMs: [60_000],
+    fileSystem: {
+      async mkdir() {},
+      async readdir() { return []; },
+      async rename() {},
+      async stat() {}
+    },
     onReady,
     serviceLogger
   });
@@ -114,6 +122,30 @@ test('Baileys reports disconnected sends as retryable and does not create a comp
   await service.close();
 });
 
+test('concurrent startup calls initialize a single Baileys socket', async () => {
+  let socketCount = 0;
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      socketCount += 1;
+      return createMockBaileysSocket();
+    },
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  const [firstSocket, secondSocket] = await Promise.all([
+    service.initialize(),
+    service.initialize()
+  ]);
+
+  assert.equal(firstSocket, secondSocket);
+  assert.equal(socketCount, 1);
+  await service.close();
+});
+
 test('saved registered credentials do not report an authenticated connection before socket open', async () => {
   let authPath;
   const { service, getSocket } = createMockedWhatsAppService({
@@ -154,6 +186,58 @@ test('Baileys exposes a temporary QR code without logging the pairing contents',
   assert.equal(typeof diagnostics.qrExpiresAt, 'number');
   assert.equal(diagnostics.authenticationValid, false);
   assert.equal(warnings.some((message) => message.includes('private-pairing-token')), false);
+  await service.close();
+});
+
+test('QR from an existing auth directory stays hidden until the user confirms a backup', async () => {
+  const sockets = [];
+  const operations = [];
+  let authDirectoryHasData = true;
+  const service = createWhatsAppService({
+    authInfoPath: 'auth_info_baileys',
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      const socket = createMockBaileysSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    fileSystem: {
+      async stat(path) { operations.push(['stat', path]); },
+      async readdir() { return authDirectoryHasData ? ['creds.json'] : []; },
+      async rename(source, destination) {
+        operations.push(['rename', source, destination]);
+        authDirectoryHasData = false;
+      },
+      async mkdir(path) { operations.push(['mkdir', path]); }
+    },
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  await service.initialize();
+  sockets[0].emit('connection.update', { qr: 'private-pairing-token' });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (service.getDiagnostics().rePairConfirmationRequired) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  assert.equal(service.getDiagnostics().qrCodeDataUrl, null);
+  const confirmation = await service.reconnect();
+  assert.equal(confirmation.rePairConfirmationRequired, true);
+  assert.equal(operations.length, 0);
+
+  const result = await service.reconnect({ confirmRePair: true });
+  assert.equal(result.success, true);
+  assert.ok(result.backupName);
+  sockets[1].emit('connection.update', { qr: 'fresh-pairing-token' });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (service.getDiagnostics().qrCodeDataUrl) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.match(service.getDiagnostics().qrCodeDataUrl, /^data:image\/png;base64,/);
+  assert.equal(operations.some(([operation]) => operation === 'rename'), true);
   await service.close();
 });
 
@@ -409,7 +493,14 @@ test('getWhatsAppDiagnostics returns safe operational shape without leaking toke
   assert.equal(typeof diagnostics.provider, 'string');
   assert.equal(typeof diagnostics.connectionStatus, 'string');
   assert.equal(typeof diagnostics.sendingCapabilityStatus, 'string');
-  assert.equal(diagnostics.connectionStatus === 'connected' || diagnostics.connectionStatus === 'disconnected' || diagnostics.connectionStatus === 'stopped' || diagnostics.connectionStatus === 'connecting', true);
+  assert.equal([
+    'connected',
+    'connecting',
+    'disconnected',
+    'logged_out',
+    'qr_required',
+    'stopped'
+  ].includes(diagnostics.connectionStatus), true);
   // Ensure no secret fields are exposed
   assert.equal(diagnostics.auth, undefined);
   assert.equal(diagnostics.creds, undefined);
@@ -458,4 +549,88 @@ test('sendWhatsAppTaskNotification safely validates empty inputs and recipient f
   const wsTarget = await sendWhatsAppTaskNotification('   ', 'Notification message');
   assert.equal(wsTarget.success, false);
   assert.equal(wsTarget.reason, 'Recipient not configured');
+});
+
+test('WhatsApp checkpoint rejects old, equal, and missing timestamps', () => {
+  const checkpoint = new Date('2026-10-16T03:30:00.000Z');
+  assert.equal(
+    isAfterWhatsAppProcessingCheckpoint(new Date('2026-10-16T03:29:59.000Z'), checkpoint),
+    false
+  );
+  assert.equal(isAfterWhatsAppProcessingCheckpoint(checkpoint, checkpoint), false);
+  assert.equal(
+    isAfterWhatsAppProcessingCheckpoint(new Date('2026-10-16T03:30:01.000Z'), checkpoint),
+    true
+  );
+  assert.equal(getWhatsAppMessageTimestamp({ messageTimestamp: 0 }), null);
+  assert.equal(getWhatsAppMessageTimestamp({}), null);
+});
+
+test('inbound notify events create one review draft for a new message and ignore old/history duplicates', async () => {
+  const checkpoint = new Date('2026-10-16T03:30:00.000Z');
+  const drafts = [];
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => createMockBaileysSocket({ readyState: 1 }),
+    reconnectDelaysMs: [60_000],
+    inboundDependencies: {
+      getCheckpoint: async () => checkpoint,
+      findMonitoredGroup: async () => ({ groupName: 'Operations Group', isPaused: false }),
+      findDraft: async (groupJid, messageId) =>
+        drafts.find((draft) => draft.groupJid === groupJid && draft.messageId === messageId),
+      createDraft: async (draftData) => {
+        const draft = { ...draftData, status: 'awaiting_review', save: async () => {} };
+        drafts.push(draft);
+        return draft;
+      },
+      extractTask: async () => ({
+        extraction: { isTask: true, confidence: 0.9, missingInformation: [] },
+        provider: 'test'
+      }),
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+  socket.emit('connection.update', { connection: 'open' });
+  const groupJid = '120363049482690322@g.us';
+  const newMessage = {
+    key: { id: 'new-message', remoteJid: groupJid, participant: 'sender@s.whatsapp.net' },
+    pushName: 'Sender',
+    messageTimestamp: Math.floor(new Date('2026-10-16T03:31:00.000Z').getTime() / 1000),
+    message: { conversation: 'Please update the project tracker' }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [
+      {
+        ...newMessage,
+        key: { ...newMessage.key, id: 'old-message' },
+        messageTimestamp: Math.floor(new Date('2026-10-16T03:29:00.000Z').getTime() / 1000)
+      },
+      newMessage
+    ]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].status, 'awaiting_review');
+  assert.equal(drafts[0].messageId, 'new-message');
+  assert.equal(drafts[0].groupJid, groupJid);
+  assert.equal(drafts[0].senderJid, 'sender@s.whatsapp.net');
+  assert.equal(drafts[0].messageTimestamp.toISOString(), '2026-10-16T03:31:00.000Z');
+  assert.equal(drafts[0].aiExtraction.isTask, true);
+
+  socket.emit('messages.upsert', { type: 'notify', messages: [newMessage] });
+  socket.emit('messages.upsert', { type: 'append', messages: [newMessage] });
+  await service.waitForInboundProcessing();
+  assert.equal(drafts.length, 1);
+
+  await service.close();
 });

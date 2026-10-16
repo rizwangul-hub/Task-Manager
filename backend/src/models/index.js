@@ -15,6 +15,7 @@ import { Contact } from './contact.model.js';
 import { TaskWhatsAppNotification, TASK_WHATSAPP_STATUSES } from './taskWhatsAppNotification.model.js';
 import { MonitoredGroup } from './monitoredGroup.model.js';
 import { TaskDraft, TASK_DRAFT_STATUSES } from './taskDraft.model.js';
+import { WhatsAppProcessingCheckpoint } from './whatsappProcessingCheckpoint.model.js';
 
 export const MODEL_NAMES = {
   USER: 'User',
@@ -29,6 +30,7 @@ export const MODEL_NAMES = {
   TASK_WHATSAPP_NOTIFICATION: 'TaskWhatsAppNotification',
   MONITORED_GROUP: 'MonitoredGroup',
   TASK_DRAFT: 'TaskDraft',
+  WHATSAPP_PROCESSING_CHECKPOINT: 'WhatsAppProcessingCheckpoint',
   INTEGRATION_MESSAGE: 'IntegrationMessage'
 };
 
@@ -56,7 +58,8 @@ export {
   TASK_WHATSAPP_STATUSES,
   MonitoredGroup,
   TaskDraft,
-  TASK_DRAFT_STATUSES
+  TASK_DRAFT_STATUSES,
+  WhatsAppProcessingCheckpoint
 };
 
 export default {
@@ -84,6 +87,6 @@ export default {
   MonitoredGroup,
   TaskDraft,
   TASK_DRAFT_STATUSES,
+  WhatsAppProcessingCheckpoint,
   MODEL_NAMES
 };
-

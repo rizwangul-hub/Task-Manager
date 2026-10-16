@@ -4,7 +4,7 @@ import makeWASocket, {
   WAMessageStatus
 } from '@whiskeysockets/baileys';
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, stat } from 'node:fs/promises';
+import { mkdir, readdir, rename, stat } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import pino from 'pino';
 import QRCode from 'qrcode';
@@ -58,7 +58,7 @@ const createBaileysLogger = (serviceLogger) => {
         return;
       }
 
-      const message = String(entry.msg || entry.err?.message || '');
+      const message = [entry.msg, entry.err?.message].filter(Boolean).join(' ');
       const now = Date.now();
       if (/Bad MAC|Failed to decrypt message with any known session|Session error/i.test(message)) {
         suppressedCryptoErrors += 1;
@@ -103,6 +103,20 @@ export function extractFullMessageText(msg) {
   return String(text || '').trim();
 }
 
+export const getWhatsAppMessageTimestamp = (msg) => {
+  const timestamp = Number(msg?.messageTimestamp);
+  return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp * 1000) : null;
+};
+
+export const isAfterWhatsAppProcessingCheckpoint = (messageTimestamp, checkpoint) => {
+  if (!checkpoint) return true;
+  const messageDate = new Date(messageTimestamp);
+  const checkpointDate = new Date(checkpoint);
+  return Number.isFinite(messageDate.getTime()) &&
+    Number.isFinite(checkpointDate.getTime()) &&
+    messageDate > checkpointDate;
+};
+
 let defaultWhatsAppService = null;
 
 export function getWhatsAppSocket() {
@@ -119,7 +133,8 @@ export const createWhatsAppService = ({
   sendReadyTimeoutMs = 20_000,
   reconnectDelaysMs = [5_000, 10_000, 20_000, 40_000, 60_000],
   maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS,
-  fileSystem = { mkdir, rename, stat },
+  fileSystem = { mkdir, readdir, rename, stat },
+  inboundDependencies = {},
   onReady = async () => {
     const { taskAssignmentNotificationService } = await import('./taskAssignmentNotification.service.js');
     await taskAssignmentNotificationService.processPending();
@@ -135,11 +150,16 @@ export const createWhatsAppService = ({
   let authStateLoadFailed = false;
   let authenticationValid = false;
   let lastConnectionAt = null;
+  let lastDisconnectionReason = null;
   let lastSuccessfulSendAt = null;
   let lastError = null;
   let pairingQrDataUrl = null;
   let pairingQrExpiresAt = null;
+  let rePairConfirmationRequired = false;
+  let pairingBackupConfirmed = false;
   const connectionWaiters = new Set();
+  let inboundQueue = Promise.resolve();
+  const pendingExtractions = new Set();
 
   const isReady = () => {
     const s = instanceSock;
@@ -152,6 +172,187 @@ export const createWhatsAppService = ({
 
   const notifyWaiters = () => {
     for (const waiter of connectionWaiters) waiter();
+  };
+
+  const enqueueInboundWork = (work) => {
+    const queuedWork = inboundQueue.then(work, work);
+    inboundQueue = queuedWork.catch((error) => {
+      serviceLogger.error(`[WA_INBOUND_ERROR] ${redactError(error)}`);
+    });
+    return queuedWork;
+  };
+
+  const waitForInboundExtractions = async () => {
+    while (pendingExtractions.size) {
+      await Promise.all([...pendingExtractions]);
+    }
+  };
+
+  const runInboundMaintenance = (work) => enqueueInboundWork(async () => {
+    await waitForInboundExtractions();
+    return work();
+  });
+
+  const waitForInboundProcessing = async () => {
+    await inboundQueue;
+    await waitForInboundExtractions();
+  };
+
+  const getInboundCheckpoint = async () => {
+    if (inboundDependencies.getCheckpoint) return inboundDependencies.getCheckpoint();
+    const { WhatsAppProcessingCheckpoint } = await import(
+      '../models/whatsappProcessingCheckpoint.model.js'
+    );
+    const checkpoint = await WhatsAppProcessingCheckpoint.findOne({ key: 'inbound' }).lean();
+    return checkpoint?.startedAt || null;
+  };
+
+  const findMonitoredGroup = async (groupJid) => {
+    if (inboundDependencies.findMonitoredGroup) {
+      return inboundDependencies.findMonitoredGroup(groupJid);
+    }
+    const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+    return MonitoredGroup.findOne({ groupJid, isMonitored: true });
+  };
+
+  const processInboundMessage = async (msg) => {
+    if (msg.key?.fromMe) return;
+    const remoteJid = msg.key?.remoteJid || '';
+    if (!remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') return;
+
+    const messageTimestamp = getWhatsAppMessageTimestamp(msg);
+    if (!messageTimestamp) {
+      serviceLogger.warn('[WA_INBOUND_IGNORED] Message has no valid provider timestamp.');
+      return;
+    }
+    const checkpoint = await getInboundCheckpoint();
+    if (!isAfterWhatsAppProcessingCheckpoint(messageTimestamp, checkpoint)) {
+      serviceLogger.info('[WA_INBOUND_OLD] Message predates the current processing checkpoint; skipping.');
+      return;
+    }
+
+    const messageText = extractFullMessageText(msg);
+    if (!messageText) return;
+    const messageId = msg.key?.id;
+    if (!messageId) return;
+
+    const monitored = await findMonitoredGroup(remoteJid);
+    if (!monitored || monitored.isPaused) return;
+
+    const senderJid = msg.key?.participant || msg.participant || remoteJid;
+    const senderName = msg.pushName || '';
+
+    if (inboundDependencies.updateGroupLastMessageAt) {
+      await inboundDependencies.updateGroupLastMessageAt(remoteJid, messageTimestamp);
+    } else {
+      const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+      await MonitoredGroup.updateOne(
+        { groupJid: remoteJid },
+        { $set: { lastMessageAt: messageTimestamp } }
+      );
+    }
+
+    let existing;
+    if (inboundDependencies.findDraft) {
+      existing = await inboundDependencies.findDraft(remoteJid, messageId);
+    } else {
+      const { TaskDraft } = await import('../models/taskDraft.model.js');
+      existing = await TaskDraft.findOne({ groupJid: remoteJid, messageId });
+    }
+    if (existing) {
+      serviceLogger.info(`[WA_INBOUND_DUP] Message ${messageId} in ${remoteJid} already drafted; skipping.`);
+      return;
+    }
+
+    let draft;
+    try {
+      const draftData = {
+        groupJid: remoteJid,
+        groupName: monitored.groupName || '',
+        messageId,
+        senderJid,
+        senderName,
+        messageTimestamp,
+        rawMessageText: messageText,
+        attempts: 1
+      };
+      if (inboundDependencies.createDraft) {
+        draft = await inboundDependencies.createDraft(draftData);
+      } else {
+        const { TaskDraft, TASK_DRAFT_STATUSES } = await import('../models/taskDraft.model.js');
+        draft = await TaskDraft.create({
+          ...draftData,
+          status: TASK_DRAFT_STATUSES.AWAITING_REVIEW
+        });
+      }
+    } catch (createErr) {
+      if (createErr.code === 11000) {
+        serviceLogger.info(`[WA_INBOUND_DUP_INDEX] Concurrent duplicate prevented for message ${messageId}.`);
+        return;
+      }
+      throw createErr;
+    }
+
+    serviceLogger.info(`[WA_INBOUND_DRAFT_CREATED] Draft recorded for message ${messageId} from ${senderName || senderJid}`);
+
+    const extractionTask = (async () => {
+      try {
+        let extraction;
+        let provider;
+        if (inboundDependencies.extractTask) {
+          ({ extraction, provider } = await inboundDependencies.extractTask(messageText, {
+            senderName,
+            messageTimestamp
+          }));
+        } else {
+          const { extractTaskFromWhatsAppMessage } = await import('./aiTaskExtraction.service.js');
+          ({ extraction, provider } = await extractTaskFromWhatsAppMessage(messageText, {
+            senderName,
+            messageTimestamp
+          }));
+        }
+
+        let newStatus = 'awaiting_review';
+        if (!extraction.isTask) {
+          newStatus = 'ignored';
+        } else if (extraction.missingInformation?.length > 0 || extraction.confidence < 0.6) {
+          newStatus = 'needs_clarification';
+        }
+
+        draft.aiExtraction = extraction;
+        draft.status = newStatus;
+        draft.extractorProvider = provider;
+        await draft.save();
+        serviceLogger.info(`[WA_INBOUND_AI_DONE] Extracted task draft for ${messageId} using ${provider} (status: ${newStatus}).`);
+        if (inboundDependencies.broadcastDraft) {
+          await inboundDependencies.broadcastDraft('whatsapp:draft_created', draft);
+        } else {
+          const { socketService } = await import('./socket.service.js');
+          socketService.broadcast('whatsapp:draft_created', draft);
+        }
+      } catch (aiErr) {
+        serviceLogger.error(`[WA_INBOUND_AI_ERROR] Extraction failed for ${messageId}: ${redactError(aiErr)}`);
+        draft.status = 'failed';
+        draft.processingError = aiErr.message || 'AI task extraction failed';
+        try {
+          await draft.save();
+        } catch (saveError) {
+          serviceLogger.error(`[WA_INBOUND_AI_ERROR] Could not persist failed extraction for ${messageId}: ${redactError(saveError)}`);
+        }
+        try {
+          if (inboundDependencies.broadcastDraft) {
+            await inboundDependencies.broadcastDraft('whatsapp:draft_created', draft);
+          } else {
+            const { socketService } = await import('./socket.service.js');
+            socketService.broadcast('whatsapp:draft_created', draft);
+          }
+        } catch (broadcastError) {
+          serviceLogger.error(`[WA_INBOUND_AI_ERROR] Could not broadcast draft ${messageId}: ${redactError(broadcastError)}`);
+        }
+      }
+    })();
+    pendingExtractions.add(extractionTask);
+    void extractionTask.finally(() => pendingExtractions.delete(extractionTask));
   };
 
   const scheduleReconnect = () => {
@@ -184,6 +385,15 @@ export const createWhatsAppService = ({
   const getPairingQr = () => {
     if (pairingQrExpiresAt && Date.now() >= pairingQrExpiresAt) clearPairingQr();
     return pairingQrDataUrl;
+  };
+
+  const authDirectoryHasData = async () => {
+    try {
+      return (await fileSystem.readdir(resolve(authInfoPath))).length > 0;
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
   };
 
   const stopCurrentSocket = () => {
@@ -223,18 +433,23 @@ export const createWhatsAppService = ({
         diagnostics: getDiagnostics()
       };
     }
-    if (connectionState === CONNECTION_STATES.LOGGED_OUT && !confirmRePair) {
+    if (
+      (connectionState === CONNECTION_STATES.LOGGED_OUT || rePairConfirmationRequired) &&
+      !confirmRePair
+    ) {
       return {
         success: false,
         rePairConfirmationRequired: true,
-        message: 'WhatsApp reported that this session is logged out. Re-pairing preserves the current authentication directory in a timestamped backup before starting a new pairing session.',
+        message: 'WhatsApp reported logout or requested a new pairing QR while saved authentication data exists. Re-pairing preserves the current authentication directory in a timestamped backup before starting a new pairing session.',
         diagnostics: getDiagnostics()
       };
     }
-    if (confirmRePair && connectionState !== CONNECTION_STATES.LOGGED_OUT) {
+    if (confirmRePair &&
+      connectionState !== CONNECTION_STATES.LOGGED_OUT &&
+      !rePairConfirmationRequired) {
       return {
         success: false,
-        message: 'A new pairing session is only allowed after WhatsApp reports the saved session as logged out.',
+        message: 'A new pairing session is only allowed after WhatsApp reports logout or requests a fresh QR while saved authentication data exists.',
         diagnostics: getDiagnostics()
       };
     }
@@ -273,13 +488,17 @@ export const createWhatsAppService = ({
 
       if (confirmRePair) {
         backupName = await preserveAuthDirectoryForPairing();
+        rePairConfirmationRequired = false;
+        pairingBackupConfirmed = true;
       }
 
       await initialize();
       return {
         success: true,
         message: confirmRePair
-          ? 'The previous authentication directory was preserved. Scan the new QR code with WhatsApp to pair.'
+          ? backupName
+            ? 'The previous authentication directory was preserved. Scan the new QR code with WhatsApp to pair.'
+            : 'No previous authentication directory existed. Scan the new QR code with WhatsApp to pair.'
           : 'Reconnect started using the existing WhatsApp authentication data.',
         backupName,
         diagnostics: getDiagnostics()
@@ -362,7 +581,7 @@ export const createWhatsAppService = ({
       try {
         const { state, saveCreds } = await authStateFactory(authInfoPath);
         authStateLoaded = true;
-        authenticationValid = Boolean(state?.creds?.registered);
+        authenticationValid = false;
         if (stopped) return null;
         const newSock = socketFactory({
           auth: state,
@@ -388,109 +607,17 @@ export const createWhatsAppService = ({
           });
         });
 
-        newSock.ev.on('messages.upsert', async ({ messages, type }) => {
+        newSock.ev.on('messages.upsert', ({ messages, type }) => {
           if (type !== 'notify' || !Array.isArray(messages)) return;
-
-          for (const msg of messages) {
-            try {
-              if (msg.key?.fromMe) continue;
-              const remoteJid = msg.key?.remoteJid || '';
-              if (!remoteJid.endsWith('@g.us')) continue;
-              if (remoteJid === 'status@broadcast') continue;
-
-              const messageText = extractFullMessageText(msg);
-              if (!messageText) continue;
-
-              const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
-              const monitored = await MonitoredGroup.findOne({ groupJid: remoteJid, isMonitored: true });
-              if (!monitored || monitored.isPaused) continue;
-
-              const messageId = msg.key?.id;
-              if (!messageId) continue;
-
-              const senderJid = msg.key?.participant || msg.participant || remoteJid;
-              const senderName = msg.pushName || '';
-              const messageTimestamp = new Date(
-                (Number(msg.messageTimestamp) || Math.floor(Date.now() / 1000)) * 1000
-              );
-
-              await MonitoredGroup.updateOne(
-                { groupJid: remoteJid },
-                { $set: { lastMessageAt: messageTimestamp } }
-              );
-
-              const { TaskDraft, TASK_DRAFT_STATUSES } = await import('../models/taskDraft.model.js');
-
-              // Deduplication: check if already exists
-              const existing = await TaskDraft.findOne({ groupJid: remoteJid, messageId });
-              if (existing) {
-                serviceLogger.info(`[WA_INBOUND_DUP] Message ${messageId} in ${remoteJid} already drafted; skipping.`);
-                continue;
-              }
-
-              // Create durable processing record before AI
-              let draft;
+          void enqueueInboundWork(async () => {
+            for (const message of messages) {
               try {
-                draft = await TaskDraft.create({
-                  groupJid: remoteJid,
-                  groupName: monitored.groupName || '',
-                  messageId,
-                  senderJid,
-                  senderName,
-                  messageTimestamp,
-                  rawMessageText: messageText,
-                  status: TASK_DRAFT_STATUSES.AWAITING_REVIEW,
-                  attempts: 1
-                });
-              } catch (createErr) {
-                if (createErr.code === 11000) {
-                  serviceLogger.info(`[WA_INBOUND_DUP_INDEX] Concurrent duplicate prevented for message ${messageId}.`);
-                  continue;
-                }
-                throw createErr;
+                await processInboundMessage(message);
+              } catch (error) {
+                serviceLogger.error(`[WA_INBOUND_ERROR] Failed to process message in Baileys: ${redactError(error)}`);
               }
-
-              serviceLogger.info(`[WA_INBOUND_DRAFT_CREATED] Draft recorded for message ${messageId} from ${senderName || senderJid}`);
-
-              // Non-blocking background AI task extraction
-              void (async () => {
-                try {
-                  const { extractTaskFromWhatsAppMessage } = await import('./aiTaskExtraction.service.js');
-                  const { extraction, provider } = await extractTaskFromWhatsAppMessage(messageText, {
-                    senderName,
-                    messageTimestamp
-                  });
-
-                  let newStatus = TASK_DRAFT_STATUSES.AWAITING_REVIEW;
-                  if (!extraction.isTask) {
-                    newStatus = TASK_DRAFT_STATUSES.IGNORED;
-                  } else if (extraction.missingInformation?.length > 0 || extraction.confidence < 0.6) {
-                    newStatus = TASK_DRAFT_STATUSES.NEEDS_CLARIFICATION;
-                  }
-
-                  draft.aiExtraction = extraction;
-                  draft.status = newStatus;
-                  draft.extractorProvider = provider;
-                  await draft.save();
-
-                  serviceLogger.info(`[WA_INBOUND_AI_DONE] Extracted task draft for ${messageId} using ${provider} (status: ${newStatus}).`);
-
-                  const { socketService } = await import('./socket.service.js');
-                  socketService.broadcast('whatsapp:draft_created', draft);
-                } catch (aiErr) {
-                  serviceLogger.error(`[WA_INBOUND_AI_ERROR] Extraction error for ${messageId}: ${aiErr.message}`);
-                  draft.status = TASK_DRAFT_STATUSES.FAILED;
-                  draft.processingError = aiErr.message || 'AI task extraction failed';
-                  await draft.save().catch(() => {});
-
-                  const { socketService } = await import('./socket.service.js');
-                  socketService.broadcast('whatsapp:draft_created', draft);
-                }
-              })();
-            } catch (err) {
-              serviceLogger.error(`[WA_INBOUND_ERROR] Failed to process message in Baileys: ${err.message}`);
             }
-          }
+          });
         });
 
 
@@ -501,16 +628,28 @@ export const createWhatsAppService = ({
             connectionState = CONNECTION_STATES.QR_REQUIRED;
             authenticationValid = false;
             clearPairingQr();
-            pairingQrExpiresAt = Date.now() + QR_TTL_MS;
             notifyWaiters();
-            void QRCode.toDataURL(update.qr).then((dataUrl) => {
-              if (instanceSock !== newSock || connectionState !== CONNECTION_STATES.QR_REQUIRED) return;
-              pairingQrDataUrl = dataUrl;
-              notifyWaiters();
-            }).catch((error) => {
-              lastError = redactError(error);
-              serviceLogger.error('[WA] Could not prepare the pairing QR for the authenticated settings page.');
-            });
+            void (async () => {
+              try {
+                const existingAuthData = await authDirectoryHasData();
+                if (instanceSock !== newSock || connectionState !== CONNECTION_STATES.QR_REQUIRED) return;
+                if (existingAuthData && !pairingBackupConfirmed) {
+                  rePairConfirmationRequired = true;
+                  lastError = 'WhatsApp requested a new pairing QR while saved authentication data exists. Confirm a backup before pairing.';
+                  serviceLogger.warn('[WA] A fresh pairing QR is waiting for explicit confirmation to preserve saved authentication data.');
+                  notifyWaiters();
+                  return;
+                }
+
+                pairingQrExpiresAt = Date.now() + QR_TTL_MS;
+                pairingQrDataUrl = await QRCode.toDataURL(update.qr);
+                if (instanceSock !== newSock || connectionState !== CONNECTION_STATES.QR_REQUIRED) return;
+                notifyWaiters();
+              } catch (error) {
+                lastError = redactError(error);
+                serviceLogger.error('[WA] Could not prepare the pairing QR for the authenticated settings page.');
+              }
+            })();
           }
 
           if (update.connection === 'open') {
@@ -518,11 +657,14 @@ export const createWhatsAppService = ({
             connectionState = authenticationValid
               ? CONNECTION_STATES.CONNECTED
               : CONNECTION_STATES.DISCONNECTED;
-            lastConnectionAt = new Date();
+            if (authenticationValid) lastConnectionAt = new Date();
             lastError = authenticationValid
               ? null
               : 'Baileys opened a connection without an authenticated WhatsApp account.';
+            lastDisconnectionReason = null;
             clearPairingQr();
+            rePairConfirmationRequired = false;
+            pairingBackupConfirmed = false;
             if (authenticationValid) reconnectAttempt = 0;
             if (authenticationValid) {
               serviceLogger.info('[WA] Baileys connected and authenticated for assignment notifications.');
@@ -541,6 +683,8 @@ export const createWhatsAppService = ({
           if (update.connection === 'close') {
             const statusCode = update.lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = statusCode === loggedOutCode;
+            const reasonName = Object.entries(DisconnectReason)
+              .find(([, code]) => code === statusCode)?.[0];
             instanceSock = null;
             authenticationValid = false;
             clearPairingQr();
@@ -552,8 +696,9 @@ export const createWhatsAppService = ({
             lastError = isLoggedOut
               ? 'WhatsApp session logged out; re-pair the existing account.'
               : statusCode
-                ? `WhatsApp connection closed (${statusCode}).`
+                ? `WhatsApp connection closed (${reasonName || statusCode}).`
                 : 'WhatsApp connection closed.';
+            lastDisconnectionReason = lastError;
             serviceLogger.warn(`[WA] Connection closed; state=${connectionState}.`);
             notifyWaiters();
             if (!isLoggedOut && !stopped) scheduleReconnect();
@@ -603,7 +748,11 @@ export const createWhatsAppService = ({
       };
       const checkConnection = () => {
         if (isReady()) finish(true);
-        else if (connectionState === CONNECTION_STATES.LOGGED_OUT || stopped) finish(false);
+        else if (
+          connectionState === CONNECTION_STATES.LOGGED_OUT ||
+          connectionState === CONNECTION_STATES.QR_REQUIRED ||
+          stopped
+        ) finish(false);
       };
       connectionWaiters.add(checkConnection);
       const timeout = setTimeout(() => finish(isReady()), sendReadyTimeoutMs);
@@ -652,6 +801,8 @@ export const createWhatsAppService = ({
     if (!(await waitForReady())) {
       const reason = isUnsupportedServerlessRuntime()
         ? SERVERLESS_RUNTIME_ERROR
+        : connectionState === CONNECTION_STATES.QR_REQUIRED
+          ? 'WhatsApp QR pairing is required; scan the QR code in Settings.'
         : connectionState === CONNECTION_STATES.LOGGED_OUT
         ? 'WhatsApp session is logged out; re-pair the existing account.'
         : authStateLoadFailed
@@ -722,6 +873,7 @@ export const createWhatsAppService = ({
     provider: 'Baileys (WhatsApp Web Multi-Device)',
     connectionStatus: connectionState,
     qrRequired: connectionState === CONNECTION_STATES.QR_REQUIRED,
+    rePairConfirmationRequired,
     qrCodeDataUrl: connectionState === CONNECTION_STATES.QR_REQUIRED ? getPairingQr() : null,
     qrExpiresAt: connectionState === CONNECTION_STATES.QR_REQUIRED ? pairingQrExpiresAt : null,
     authenticationValid,
@@ -731,6 +883,7 @@ export const createWhatsAppService = ({
       ? `${SERVERLESS_RUNTIME_ERROR} Deploy the backend API to an always-on Node.js host.`
       : null,
     lastConnectionAt,
+    lastDisconnectionReason,
     lastSuccessfulSendAt,
     lastError: lastError
       ? redactError(lastError)
@@ -767,6 +920,8 @@ export const createWhatsAppService = ({
     sendWhatsAppTaskNotification,
     getDiagnostics,
     getParticipatingGroups,
+    runInboundMaintenance,
+    waitForInboundProcessing,
     getSocket: () => instanceSock,
     normalizeWhatsAppPhoneNumber
   };
@@ -784,4 +939,5 @@ export const sendWhatsAppMessage = async (...args) =>
   (await whatsappService.sendWhatsAppTaskNotification(...args)).success;
 export const getWhatsAppDiagnostics = () => whatsappService.getDiagnostics();
 export const getParticipatingGroups = () => whatsappService.getParticipatingGroups();
+export const runWhatsAppInboundMaintenance = (work) => whatsappService.runInboundMaintenance(work);
 export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber };

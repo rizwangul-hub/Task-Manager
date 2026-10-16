@@ -104,6 +104,7 @@ export const whatsappDraftController = {
         return a.groupName.localeCompare(b.groupName);
       });
 
+      res.set('Cache-Control', 'no-store, private');
       res.status(200).json({
         status: 'success',
         data: {

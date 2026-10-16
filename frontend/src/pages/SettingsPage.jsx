@@ -33,7 +33,7 @@ import {
 
 export const SettingsPage = () => {
   const { apiStatus } = useOutletContext() || {};
-  const { user, checkSession } = useAuth();
+  const { user, checkSession, isAdmin } = useAuth();
   const { toast } = useToast();
 
   const [companyName, setCompanyName] = useState('PixxTechnologiees');
@@ -49,6 +49,11 @@ export const SettingsPage = () => {
   const [testRecipientConsented, setTestRecipientConsented] = useState(false);
   const [sendingTestWhatsApp, setSendingTestWhatsApp] = useState(false);
   const [reconnectingWhatsApp, setReconnectingWhatsApp] = useState(false);
+  const [resetPreview, setResetPreview] = useState(null);
+  const [showHistoryResetModal, setShowHistoryResetModal] = useState(false);
+  const [loadingHistoryResetPreview, setLoadingHistoryResetPreview] = useState(false);
+  const [confirmHistoryReset, setConfirmHistoryReset] = useState(false);
+  const [resettingWhatsAppHistory, setResettingWhatsAppHistory] = useState(false);
 
   // WhatsApp Groups Monitoring State
   const [monitoredGroups, setMonitoredGroups] = useState([]);
@@ -304,6 +309,36 @@ export const SettingsPage = () => {
     }
   };
 
+  const handleOpenHistoryReset = async () => {
+    setLoadingHistoryResetPreview(true);
+    try {
+      const response = await whatsappService.getHistoryResetPreview();
+      setResetPreview(response.data?.preview || null);
+      setConfirmHistoryReset(false);
+      setShowHistoryResetModal(true);
+    } catch (error) {
+      toast.error(error.message || 'Could not load WhatsApp task and draft counts.');
+    } finally {
+      setLoadingHistoryResetPreview(false);
+    }
+  };
+
+  const handleResetWhatsAppHistory = async () => {
+    if (!confirmHistoryReset) return;
+    setResettingWhatsAppHistory(true);
+    try {
+      const response = await whatsappService.resetHistory();
+      setShowHistoryResetModal(false);
+      setConfirmHistoryReset(false);
+      toast.success(response.message || 'WhatsApp history cleared; processing is starting fresh.');
+      await Promise.all([fetchGroups(), fetchWhatsAppDiagnostics()]);
+    } catch (error) {
+      toast.error(error.message || 'Could not reset WhatsApp task history.');
+    } finally {
+      setResettingWhatsAppHistory(false);
+    }
+  };
+
   return (
     <PageContainer
       title="System Settings"
@@ -413,6 +448,11 @@ export const SettingsPage = () => {
                 ? new Date(whatsappDiagnostics.lastConnectionAt).toLocaleString()
                 : 'No connection established since this server started'}
             </p>
+            {whatsappDiagnostics?.lastDisconnectionReason && (
+              <p className="text-sm text-muted">
+                <strong>Last disconnection:</strong> {whatsappDiagnostics.lastDisconnectionReason}
+              </p>
+            )}
             <p className="text-sm text-muted">
               <strong>Last successful send:</strong>{' '}
               {whatsappDiagnostics?.lastSuccessfulSendAt
@@ -431,6 +471,12 @@ export const SettingsPage = () => {
                   On your phone, open WhatsApp → Linked devices → Link a device, then scan this code.
                   The QR code expires; refresh or reconnect to request a new one.
                 </p>
+                {whatsappDiagnostics.rePairConfirmationRequired && (
+                  <p className="text-danger">
+                    Saved authentication data will be preserved in a backup before a new pairing QR is shown.
+                    Select Reconnect WhatsApp to review and confirm that step.
+                  </p>
+                )}
                 {whatsappDiagnostics.qrCodeDataUrl ? (
                   <img
                     src={whatsappDiagnostics.qrCodeDataUrl}
@@ -440,7 +486,11 @@ export const SettingsPage = () => {
                     style={{ display: 'block', maxWidth: '100%', background: 'white', padding: '0.5rem' }}
                   />
                 ) : (
-                  <p className="text-muted">Preparing a temporary QR code…</p>
+                  <p className="text-muted">
+                    {whatsappDiagnostics.rePairConfirmationRequired
+                      ? 'A new QR is waiting for your explicit backup confirmation.'
+                      : 'Preparing a temporary QR code or waiting for a fresh code. Use Reconnect WhatsApp if this does not appear shortly.'}
+                  </p>
                 )}
               </div>
             )}
@@ -588,6 +638,39 @@ export const SettingsPage = () => {
               <strong>Baileys Connection Notice & Limitations:</strong> Incoming messages are captured in real-time while the server connection is connected. Messages sent prior to enabling or while offline cannot be guaranteed without full session sync. Message edits or ephemeral timer changes follow standard WhatsApp multi-device behavior.
             </div>
           </div>
+
+          {isAdmin && (
+            <div
+              style={{
+                border: '1px solid #fecaca',
+                borderRadius: '8px',
+                padding: '1rem',
+                marginBottom: '1rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '1rem',
+                flexWrap: 'wrap'
+              }}
+            >
+              <div>
+                <strong>Start WhatsApp task capture fresh</strong>
+                <p className="text-sm text-muted" style={{ margin: '0.25rem 0 0' }}>
+                  This only clears tasks identified as WhatsApp-imported and WhatsApp message drafts.
+                  Manually created tasks and unrelated workspace data remain untouched.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="danger"
+                icon={RotateCcw}
+                isLoading={loadingHistoryResetPreview}
+                onClick={handleOpenHistoryReset}
+              >
+                Clear Old WhatsApp Tasks &amp; Start Fresh
+              </Button>
+            </div>
+          )}
 
           {loadingGroups ? (
             <p className="text-muted">Discovering WhatsApp groups from active session...</p>
@@ -996,6 +1079,58 @@ export const SettingsPage = () => {
       </div>
 
       {/* Sample Message Test Modal */}
+      <Modal
+        isOpen={showHistoryResetModal}
+        onClose={() => {
+          if (!resettingWhatsAppHistory) setShowHistoryResetModal(false);
+        }}
+        title="Clear Old WhatsApp Tasks & Start Fresh"
+        maxWidth="540px"
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowHistoryResetModal(false)}
+              disabled={resettingWhatsAppHistory}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={handleResetWhatsAppHistory}
+              isLoading={resettingWhatsAppHistory}
+              disabled={!confirmHistoryReset}
+            >
+              Clear and Start Fresh
+            </Button>
+          </>
+        }
+      >
+        <p>
+          This reset will delete <strong>{resetPreview?.tasks ?? 0} WhatsApp-imported task(s)</strong> and{' '}
+          <strong>{resetPreview?.drafts ?? 0} WhatsApp draft(s)</strong>, along with records attached to those
+          tasks. The processing checkpoint will be set when you confirm.
+        </p>
+        <p className="text-muted">
+          Manually created tasks, users, assignments on other tasks, company settings, the linked WhatsApp
+          session, and unrelated data will remain untouched. Messages timestamped at or before the reset
+          checkpoint will be ignored, including messages delivered after a backend restart.
+        </p>
+        <label className="pref-toggle-item" style={{ marginTop: '1rem' }}>
+          <input
+            type="checkbox"
+            checked={confirmHistoryReset}
+            onChange={(event) => setConfirmHistoryReset(event.target.checked)}
+            className="pref-checkbox"
+          />
+          <span className="pref-label-group">
+            <span className="pref-title">I understand and want to permanently clear these WhatsApp records.</span>
+          </span>
+        </label>
+      </Modal>
+
       <Modal
         isOpen={sampleModalOpen}
         onClose={() => setSampleModalOpen(false)}
