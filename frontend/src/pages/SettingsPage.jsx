@@ -327,12 +327,17 @@ export const SettingsPage = () => {
     if (!confirmHistoryReset) return;
     setResettingWhatsAppHistory(true);
     try {
-      const response = await whatsappService.resetHistory();
+      const response = await whatsappService.resetHistory(resetPreview);
       setShowHistoryResetModal(false);
       setConfirmHistoryReset(false);
       toast.success(response.message || 'WhatsApp history cleared; processing is starting fresh.');
       await Promise.all([fetchGroups(), fetchWhatsAppDiagnostics()]);
     } catch (error) {
+      if (error.status === 409) {
+        const updatedPreview = error.data?.data?.preview;
+        if (updatedPreview) setResetPreview(updatedPreview);
+        setConfirmHistoryReset(false);
+      }
       toast.error(error.message || 'Could not reset WhatsApp task history.');
     } finally {
       setResettingWhatsAppHistory(false);

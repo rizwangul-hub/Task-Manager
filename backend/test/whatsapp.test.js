@@ -298,6 +298,10 @@ test('manual reconnect reuses saved authentication and creates only one replacem
     serviceLogger: { info() {}, warn() {}, error() {} }
   });
   const originalSocket = await service.initialize();
+  originalSocket.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 408 } } }
+  });
   const result = await service.reconnect();
 
   assert.equal(sockets.length, 2);
@@ -376,6 +380,29 @@ test('repeated Baileys Bad MAC errors are sanitized and rate limited', async () 
   assert.doesNotMatch(cryptoWarnings[0], /private-session-material|Bad MAC/);
   assert.equal(service.getDiagnostics().connectionStatus, 'connecting');
   await service.close();
+});
+
+test('libsignal direct decryption console errors are rate limited and restored on close', async () => {
+  const warnings = [];
+  const originalConsoleError = console.error;
+  const { service } = createMockedWhatsAppService({
+    serviceLogger: { info() {}, warn(message) { warnings.push(message); }, error() {} }
+  });
+  await service.initialize();
+  try {
+    assert.notEqual(console.error, originalConsoleError);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      console.error('Failed to decrypt message with any known session...');
+    }
+
+    const cryptoWarnings = warnings.filter((message) => message.includes('[WA_CRYPTO]'));
+    assert.equal(cryptoWarnings.length, 1);
+    assert.match(cryptoWarnings[0], /1 similar event/);
+    assert.doesNotMatch(cryptoWarnings[0], /known session|Bad MAC/);
+  } finally {
+    await service.close();
+  }
+  assert.equal(console.error, originalConsoleError);
 });
 
 test('automatic reconnection stops after the configured attempt limit', async () => {
@@ -576,9 +603,11 @@ test('inbound notify events create one review draft for a new message and ignore
     }),
     socketFactory: () => createMockBaileysSocket({ readyState: 1 }),
     reconnectDelaysMs: [60_000],
+    onReady: async () => {},
     inboundDependencies: {
       getCheckpoint: async () => checkpoint,
       findMonitoredGroup: async () => ({ groupName: 'Operations Group', isPaused: false }),
+      updateGroupLastMessageAt: async () => {},
       findDraft: async (groupJid, messageId) =>
         drafts.find((draft) => draft.groupJid === groupJid && draft.messageId === messageId),
       createDraft: async (draftData) => {
@@ -633,4 +662,86 @@ test('inbound notify events create one review draft for a new message and ignore
   assert.equal(drafts.length, 1);
 
   await service.close();
+});
+
+test('reset waits for active extraction and checkpoint rejects replayed messages after service restart', async () => {
+  let checkpoint = new Date('2026-10-16T03:30:00.000Z');
+  let releaseExtraction;
+  let notifyExtractionStarted;
+  const extractionGate = new Promise((resolve) => { releaseExtraction = resolve; });
+  const extractionStarted = new Promise((resolve) => { notifyExtractionStarted = resolve; });
+  const drafts = [];
+  const inboundDependencies = {
+    getCheckpoint: async () => checkpoint,
+    findMonitoredGroup: async () => ({ groupName: 'Operations Group', isPaused: false }),
+    findDraft: async (groupJid, messageId) =>
+      drafts.find((draft) => draft.groupJid === groupJid && draft.messageId === messageId),
+    createDraft: async (draftData) => {
+      const draft = { ...draftData, status: 'awaiting_review', save: async () => {} };
+      drafts.push(draft);
+      return draft;
+    },
+    extractTask: async () => {
+      notifyExtractionStarted();
+      await extractionGate;
+      return {
+        extraction: { isTask: true, confidence: 0.9, missingInformation: [] },
+        provider: 'test'
+      };
+    },
+    broadcastDraft: async () => {}
+  };
+  const createService = () => createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => createMockBaileysSocket({ readyState: 1 }),
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    inboundDependencies,
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  const createMessage = (id, timestamp) => ({
+    key: { id, remoteJid: '120363049482690322@g.us', participant: 'sender@s.whatsapp.net' },
+    messageTimestamp: Math.floor(new Date(timestamp).getTime() / 1000),
+    message: { conversation: 'Please update the project tracker' }
+  });
+
+  const service = createService();
+  await service.initialize();
+  service.getSocket().emit('connection.update', { connection: 'open' });
+  service.getSocket().emit('messages.upsert', {
+    type: 'notify',
+    messages: [createMessage('before-reset', '2026-10-16T03:31:00.000Z')]
+  });
+  await extractionStarted;
+
+  let resetCompleted = false;
+  const reset = service.runInboundMaintenance(async () => {
+    checkpoint = new Date('2026-10-16T03:32:00.000Z');
+    resetCompleted = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resetCompleted, false, 'reset must wait until in-flight AI extraction saves its draft');
+  releaseExtraction();
+  await reset;
+  assert.equal(resetCompleted, true);
+  await service.close();
+
+  const restartedService = createService();
+  await restartedService.initialize();
+  restartedService.getSocket().emit('connection.update', { connection: 'open' });
+  restartedService.getSocket().emit('messages.upsert', {
+    type: 'notify',
+    messages: [
+      createMessage('replayed-old-message', '2026-10-16T03:31:00.000Z'),
+      createMessage('new-after-restart', '2026-10-16T03:33:00.000Z')
+    ]
+  });
+  await restartedService.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 2);
+  assert.deepEqual(drafts.map((draft) => draft.messageId), ['before-reset', 'new-after-restart']);
+  await restartedService.close();
 });

@@ -16,8 +16,14 @@ export const whatsappService = {
     return apiClient.get('/whatsapp/history/reset-preview');
   },
 
-  resetHistory() {
-    return apiClient.post('/whatsapp/history/reset', { confirmed: true });
+  resetHistory(expectedCounts) {
+    return apiClient.post('/whatsapp/history/reset', {
+      confirmed: true,
+      expectedCounts: {
+        tasks: expectedCounts.tasks,
+        drafts: expectedCounts.drafts
+      }
+    });
   },
 
   /**

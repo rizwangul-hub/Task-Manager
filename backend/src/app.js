@@ -32,13 +32,21 @@ app.use(helmet());
 const allowedOrigins = env.NODE_ENV === 'production'
   ? env.FRONTEND_ORIGINS
   : [...env.FRONTEND_ORIGINS, 'http://127.0.0.1:5173'];
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  // Allow all Vercel deployment URLs (*.vercel.app)
+  if (/^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.vercel\.app$/i.test(origin)) return true;
+  return false;
+};
+
 app.use(cors({
   origin: (origin, callback) => {
-    // Non-browser clients have no Origin header; browser origins must be explicitly allowed.
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
-      callback(new Error(`Origin ${origin} not allowed by CORS`));
+      callback(null, false);
     }
   },
   credentials: true,

@@ -34,19 +34,38 @@ export const whatsappDraftController = {
     if (req.body?.confirmed !== true) {
       return next(new AppError('Explicit confirmation is required to reset WhatsApp task history.', 400));
     }
+    const expectedCounts = req.body?.expectedCounts;
+    if (
+      !expectedCounts ||
+      !Number.isInteger(expectedCounts.tasks) ||
+      !Number.isInteger(expectedCounts.drafts)
+    ) {
+      return next(new AppError('A current WhatsApp task and draft count preview is required.', 400));
+    }
 
     try {
-      const result = await runWhatsAppInboundMaintenance(() => resetWhatsAppHistory(req.user));
-      logger.info('WhatsApp task history reset completed.', {
-        adminId: req.user._id.toString(),
-        tasks: result.tasks,
-        drafts: result.drafts,
-        startedAt: result.startedAt.toISOString()
-      });
-      res.status(200).json({
-        status: 'success',
-        message: 'Old WhatsApp tasks and drafts were cleared. New message processing has started.',
-        data: { result }
+      await runWhatsAppInboundMaintenance(async () => {
+        const preview = await getWhatsAppHistoryResetPreview();
+        if (preview.tasks !== expectedCounts.tasks || preview.drafts !== expectedCounts.drafts) {
+          return res.status(409).json({
+            status: 'fail',
+            message: 'WhatsApp task or draft counts changed. Review the updated counts and confirm again.',
+            data: { preview }
+          });
+        }
+
+        const result = await resetWhatsAppHistory(req.user);
+        logger.info('WhatsApp task history reset completed.', {
+          adminId: req.user._id.toString(),
+          tasks: result.tasks,
+          drafts: result.drafts,
+          startedAt: result.startedAt.toISOString()
+        });
+        res.status(200).json({
+          status: 'success',
+          message: 'Old WhatsApp tasks and drafts were cleared. New message processing has started.',
+          data: { result }
+        });
       });
     } catch (error) {
       logger.error('WhatsApp task history reset failed.', error);
@@ -394,7 +413,7 @@ export const whatsappDraftController = {
    * POST /api/whatsapp/drafts/:id/approve
    * Explicit owner approval: atomically creates Task and marks draft approved
    */
-  approveDraft: async (req, res, next) => {
+  approveDraft: async (req, res, next) => runWhatsAppInboundMaintenance(async () => {
     try {
       if (!mongoose.isValidObjectId(req.params.id)) {
         return next(new AppError('Invalid draft ID.', 400));
@@ -627,7 +646,7 @@ export const whatsappDraftController = {
     } catch (error) {
       next(error);
     }
-  },
+  }),
 
   /**
    * POST /api/whatsapp/drafts/:id/reject

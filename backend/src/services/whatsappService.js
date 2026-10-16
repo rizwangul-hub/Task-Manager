@@ -43,6 +43,54 @@ const SERVERLESS_RUNTIME_ERROR =
   'Baileys requires a persistent Node.js process; this API is running as a Vercel serverless function.';
 const QR_TTL_MS = 60_000;
 const MAX_RECONNECT_ATTEMPTS = 8;
+const cryptoConsoleFilterKey = Symbol.for('task-manager.whatsapp-crypto-console-filter');
+
+const installCryptoConsoleErrorFilter = (serviceLogger) => {
+  let filterState = globalThis[cryptoConsoleFilterKey];
+  if (!filterState) {
+    const originalError = console.error;
+    const state = {
+      originalError,
+      consumers: 0,
+      lastWarningAt: 0,
+      suppressedErrors: 0,
+      wrapper: null
+    };
+    state.wrapper = (...args) => {
+      const message = args.map((value) =>
+        typeof value === 'string' ? value : value?.message || ''
+      ).join(' ');
+      if (/Failed to decrypt message with any known session|Session error: Bad MAC|Bad MAC/.test(message)) {
+        state.suppressedErrors += 1;
+        const now = Date.now();
+        if (now - state.lastWarningAt >= 60_000) {
+          serviceLogger.warn(
+            `[WA_CRYPTO] A message could not be decrypted (${state.suppressedErrors} similar event(s) since the previous report). The saved session was not changed.`
+          );
+          state.lastWarningAt = now;
+          state.suppressedErrors = 0;
+        }
+        return;
+      }
+      state.originalError.apply(console, args);
+    };
+    filterState = state;
+    globalThis[cryptoConsoleFilterKey] = state;
+    console.error = state.wrapper;
+  }
+
+  filterState.consumers += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    filterState.consumers -= 1;
+    if (filterState.consumers === 0) {
+      if (console.error === filterState.wrapper) console.error = filterState.originalError;
+      delete globalThis[cryptoConsoleFilterKey];
+    }
+  };
+};
 
 const createBaileysLogger = (serviceLogger) => {
   let lastCryptoWarningAt = 0;
@@ -157,6 +205,7 @@ export const createWhatsAppService = ({
   let pairingQrExpiresAt = null;
   let rePairConfirmationRequired = false;
   let pairingBackupConfirmed = false;
+  let releaseCryptoConsoleFilter = null;
   const connectionWaiters = new Set();
   let inboundQueue = Promise.resolve();
   const pendingExtractions = new Set();
@@ -399,6 +448,8 @@ export const createWhatsAppService = ({
   const stopCurrentSocket = () => {
     const activeSocket = instanceSock;
     instanceSock = null;
+    releaseCryptoConsoleFilter?.();
+    releaseCryptoConsoleFilter = null;
     if (!activeSocket) return;
     try {
       activeSocket.ev?.removeAllListeners?.();
@@ -583,6 +634,7 @@ export const createWhatsAppService = ({
         authStateLoaded = true;
         authenticationValid = false;
         if (stopped) return null;
+        releaseCryptoConsoleFilter ??= installCryptoConsoleErrorFilter(serviceLogger);
         const newSock = socketFactory({
           auth: state,
           logger: createBaileysLogger(serviceLogger),
@@ -686,6 +738,8 @@ export const createWhatsAppService = ({
             const reasonName = Object.entries(DisconnectReason)
               .find(([, code]) => code === statusCode)?.[0];
             instanceSock = null;
+            releaseCryptoConsoleFilter?.();
+            releaseCryptoConsoleFilter = null;
             authenticationValid = false;
             clearPairingQr();
             connectionState = isLoggedOut
@@ -708,6 +762,8 @@ export const createWhatsAppService = ({
         return newSock;
       } catch (error) {
         instanceSock = null;
+        releaseCryptoConsoleFilter?.();
+        releaseCryptoConsoleFilter = null;
         authenticationValid = false;
         connectionState = CONNECTION_STATES.DISCONNECTED;
         lastError = redactError(error);
@@ -860,6 +916,8 @@ export const createWhatsAppService = ({
     notifyWaiters();
     const activeSocket = instanceSock;
     instanceSock = null;
+    releaseCryptoConsoleFilter?.();
+    releaseCryptoConsoleFilter = null;
     if (!activeSocket) return;
     try {
       activeSocket.ev?.removeAllListeners?.();
