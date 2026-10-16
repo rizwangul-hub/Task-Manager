@@ -230,6 +230,7 @@ export const whatsappDraftController = {
           ...extraction,
           provider,
           extraction,
+          fallbackReason: result?.fallbackReason || null,
           modelUsed: extraction.modelUsed || provider
         }
       });

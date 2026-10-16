@@ -1239,7 +1239,9 @@ export const SettingsPage = () => {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontWeight: 600, color: '#334155' }}>Gemini AI Extraction Output</span>
+              <span style={{ fontWeight: 600, color: '#334155' }}>
+                Task Extraction Output ({sampleResult.provider || 'heuristic'})
+              </span>
               <span
                 style={{
                   padding: '2px 8px',
@@ -1253,6 +1255,10 @@ export const SettingsPage = () => {
                 {sampleResult.isTask ? 'TASK DETECTED' : 'NOT A TASK'}
               </span>
             </div>
+
+            {sampleResult.fallbackReason && (
+              <p className="text-danger" role="status">{sampleResult.fallbackReason}</p>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
               <div><strong>Confidence:</strong> {Math.round((sampleResult.confidence || 0) * 100)}%</div>
