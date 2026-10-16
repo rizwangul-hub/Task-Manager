@@ -29,8 +29,8 @@ export const authenticate = async (req, res, next) => {
   if (mongoose.connection.readyState !== 1) {
     try {
       await connectDB();
-    } catch {
-      // handled by readyState check below
+    } catch (dbErr) {
+      logger.error('[DB_AUTH_ERROR] Database connection attempt failed during request authentication:', dbErr);
     }
   }
 

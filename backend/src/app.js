@@ -9,6 +9,7 @@ import { apiLimiter } from './middleware/rateLimiter.js';
 import { notFoundHandler } from './middleware/notFound.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { connectDB } from './config/db.js';
+import { logger } from './utils/logger.js';
 import apiRouter from './routes/index.js';
 
 const app = express();
@@ -18,8 +19,8 @@ const sanitizeMongoInput = mongoSanitize();
 app.use(async (req, res, next) => {
   try {
     await connectDB();
-  } catch {
-    // connectDB already logs error internally
+  } catch (err) {
+    logger.error('[DB_MIDDLEWARE_ERROR] Error connecting to database on request:', err);
   }
   next();
 });

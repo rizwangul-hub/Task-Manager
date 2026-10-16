@@ -20,7 +20,7 @@ export const projectController = {
       if (req.query.archived === 'true') {
         query.isArchived = true;
       } else {
-        query.isArchived = false;
+        query.isArchived = { $ne: true };
       }
 
       // Members only see boards they belong to; managers and admins manage all boards.
