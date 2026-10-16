@@ -9,10 +9,51 @@ import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { getParticipatingGroups, getWhatsAppDiagnostics } from '../services/whatsappService.js';
 import { extractTaskFromWhatsAppMessage } from '../services/aiTaskExtraction.service.js';
 import { socketService } from '../services/socket.service.js';
+import {
+  getWhatsAppHistoryResetPreview,
+  resetWhatsAppHistory
+} from '../services/whatsappHistoryReset.service.js';
+import { runWhatsAppInboundMaintenance } from '../services/whatsappService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
 
 export const whatsappDraftController = {
+  getHistoryResetPreview: async (_req, res, next) => {
+    try {
+      const preview = await getWhatsAppHistoryResetPreview();
+      res.status(200).json({
+        status: 'success',
+        data: { preview }
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  resetHistory: async (req, res, next) => {
+    if (req.body?.confirmed !== true) {
+      return next(new AppError('Explicit confirmation is required to reset WhatsApp task history.', 400));
+    }
+
+    try {
+      const result = await runWhatsAppInboundMaintenance(() => resetWhatsAppHistory(req.user));
+      logger.info('WhatsApp task history reset completed.', {
+        adminId: req.user._id.toString(),
+        tasks: result.tasks,
+        drafts: result.drafts,
+        startedAt: result.startedAt.toISOString()
+      });
+      res.status(200).json({
+        status: 'success',
+        message: 'Old WhatsApp tasks and drafts were cleared. New message processing has started.',
+        data: { result }
+      });
+    } catch (error) {
+      logger.error('WhatsApp task history reset failed.', error);
+      next(error);
+    }
+  },
+
   /**
    * GET /api/whatsapp/groups
    * Fetches available WhatsApp groups from Baileys and merges with database monitoring configuration

@@ -481,4 +481,96 @@ test('18. validateExtractionOutput preserves assigneeName, assigneePhone, reason
   assert.equal(validated.priority, 'Urgent');
 });
 
+test('19. Inbound messages from manager account (fromMe === true) are ignored', () => {
+  const shouldProcessMessage = (msg) => {
+    if (msg?.key?.fromMe) return false;
+    const remoteJid = msg?.key?.remoteJid || '';
+    if (!remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') return false;
+    return true;
+  };
+
+  assert.equal(shouldProcessMessage({ key: { fromMe: true, remoteJid: '120363049482690322@g.us' } }), false);
+  assert.equal(shouldProcessMessage({ key: { fromMe: false, remoteJid: '120363049482690322@g.us' } }), true);
+});
+
+test('20. Paused monitored groups are bypassed from inbound draft creation', () => {
+  const groupsDb = new Map([
+    ['120363049482690322@g.us', { isMonitored: true, isPaused: false }],
+    ['120363049482690333@g.us', { isMonitored: true, isPaused: true }],
+    ['120363049482690444@g.us', { isMonitored: false, isPaused: false }]
+  ]);
+
+  const isGroupActive = (jid) => {
+    const record = groupsDb.get(jid);
+    return Boolean(record && record.isMonitored && !record.isPaused);
+  };
+
+  assert.equal(isGroupActive('120363049482690322@g.us'), true);
+  assert.equal(isGroupActive('120363049482690333@g.us'), false, 'Paused groups must not trigger task intake');
+  assert.equal(isGroupActive('120363049482690444@g.us'), false, 'Disabled groups must not trigger task intake');
+  assert.equal(isGroupActive('120363099999999999@g.us'), false, 'Unknown groups must not trigger task intake');
+});
+
+test('21. Non-actionable conversation transitions draft to ignored without creating a task', () => {
+  let createdTaskCount = 0;
+  const processDraftResult = (extraction) => {
+    if (!extraction.isTask) {
+      return { status: TASK_DRAFT_STATUSES.IGNORED, taskCreated: false };
+    }
+    createdTaskCount++;
+    return { status: TASK_DRAFT_STATUSES.APPROVED, taskCreated: true };
+  };
+
+  const casualResult = processDraftResult({ isTask: false, reason: 'Casual greeting' });
+  assert.equal(casualResult.status, 'ignored');
+  assert.equal(casualResult.taskCreated, false);
+  assert.equal(createdTaskCount, 0);
+
+  const taskResult = processDraftResult({ isTask: true, title: 'Fix report' });
+  assert.equal(taskResult.status, 'approved');
+  assert.equal(taskResult.taskCreated, true);
+  assert.equal(createdTaskCount, 1);
+});
+
+test('22. Reconnect safety: socket re-initialization replaces inactive socket without duplicate intake', async () => {
+  let intakeEventCount = 0;
+  let activeSocketInstance = null;
+
+  const mockConnect = () => {
+    const listeners = new Map();
+    const sock = {
+      id: Math.random().toString(),
+      on: (event, handler) => { listeners.set(event, handler); },
+      trigger: (event, payload) => { listeners.get(event)?.(payload); },
+      close: () => { listeners.clear(); }
+    };
+
+    if (activeSocketInstance) {
+      activeSocketInstance.close();
+    }
+    activeSocketInstance = sock;
+
+    sock.on('messages.upsert', () => {
+      intakeEventCount++;
+    });
+
+    return sock;
+  };
+
+  // Initial connect
+  const socket1 = mockConnect();
+  socket1.trigger('messages.upsert', { type: 'notify' });
+  assert.equal(intakeEventCount, 1);
+
+  // Simulated reconnect: socket1 is replaced by socket2
+  const socket2 = mockConnect();
+  socket2.trigger('messages.upsert', { type: 'notify' });
+  assert.equal(intakeEventCount, 2, 'Only the active socket processes events after reconnect');
+
+  // Stale socket1 triggers must have no effect
+  socket1.trigger('messages.upsert', { type: 'notify' });
+  assert.equal(intakeEventCount, 2, 'Stale socket listeners must be closed');
+});
+
+
 

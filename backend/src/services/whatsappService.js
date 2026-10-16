@@ -3,8 +3,11 @@ import makeWASocket, {
   useMultiFileAuthState,
   WAMessageStatus
 } from '@whiskeysockets/baileys';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rename, stat } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import pino from 'pino';
-import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import { env } from '../config/env.js';
 import { logger as defaultLogger } from '../utils/logger.js';
 
@@ -13,6 +16,7 @@ const CONNECTION_STATES = {
   CONNECTED: 'connected',
   DISCONNECTED: 'disconnected',
   LOGGED_OUT: 'logged_out',
+  QR_REQUIRED: 'qr_required',
   STOPPED: 'stopped'
 };
 
@@ -37,6 +41,44 @@ const redactError = (error) => redactPhoneNumber(error?.message || error || 'Unk
 const isUnsupportedServerlessRuntime = () => process.env.VERCEL === '1';
 const SERVERLESS_RUNTIME_ERROR =
   'Baileys requires a persistent Node.js process; this API is running as a Vercel serverless function.';
+const QR_TTL_MS = 60_000;
+const MAX_RECONNECT_ATTEMPTS = 8;
+
+const createBaileysLogger = (serviceLogger) => {
+  let lastCryptoWarningAt = 0;
+  let suppressedCryptoErrors = 0;
+  let lastOtherWarningAt = 0;
+
+  return pino({ level: 'error' }, {
+    write: (line) => {
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        return;
+      }
+
+      const message = String(entry.msg || entry.err?.message || '');
+      const now = Date.now();
+      if (/Bad MAC|Failed to decrypt message with any known session|Session error/i.test(message)) {
+        suppressedCryptoErrors += 1;
+        if (now - lastCryptoWarningAt >= 60_000) {
+          serviceLogger.warn(
+            `[WA_CRYPTO] A message could not be decrypted (${suppressedCryptoErrors} similar event(s) since the previous report). The saved session was not changed.`
+          );
+          lastCryptoWarningAt = now;
+          suppressedCryptoErrors = 0;
+        }
+        return;
+      }
+
+      if (now - lastOtherWarningAt >= 60_000) {
+        serviceLogger.warn('[WA_BAILEYS] Baileys reported an internal error; details omitted.');
+        lastOtherWarningAt = now;
+      }
+    }
+  });
+};
 
 export function extractFullMessageText(msg) {
   if (!msg || !msg.message) return '';
@@ -76,6 +118,8 @@ export const createWhatsAppService = ({
   loggedOutCode = DisconnectReason.loggedOut,
   sendReadyTimeoutMs = 20_000,
   reconnectDelaysMs = [5_000, 10_000, 20_000, 40_000, 60_000],
+  maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS,
+  fileSystem = { mkdir, rename, stat },
   onReady = async () => {
     const { taskAssignmentNotificationService } = await import('./taskAssignmentNotification.service.js');
     await taskAssignmentNotificationService.processPending();
@@ -84,6 +128,7 @@ export const createWhatsAppService = ({
   let instanceSock = null;
   let connectionState = CONNECTION_STATES.DISCONNECTED;
   let initializationPromise = null;
+  let reconnectPromise = null;
   let reconnectTimer = null;
   let reconnectAttempt = 0;
   let stopped = false;
@@ -92,6 +137,8 @@ export const createWhatsAppService = ({
   let lastConnectionAt = null;
   let lastSuccessfulSendAt = null;
   let lastError = null;
+  let pairingQrDataUrl = null;
+  let pairingQrExpiresAt = null;
   const connectionWaiters = new Set();
 
   const isReady = () => {
@@ -109,6 +156,12 @@ export const createWhatsAppService = ({
 
   const scheduleReconnect = () => {
     if (stopped || connectionState === CONNECTION_STATES.LOGGED_OUT || reconnectTimer) return;
+    if (reconnectAttempt >= maxReconnectAttempts) {
+      lastError = 'Automatic reconnection stopped after repeated failures. Use Reconnect WhatsApp to try again.';
+      serviceLogger.error(`[WA] ${lastError}`);
+      notifyWaiters();
+      return;
+    }
     const delayIndex = Math.min(reconnectAttempt, reconnectDelaysMs.length - 1);
     const delayMs = reconnectDelaysMs[delayIndex];
     reconnectAttempt += 1;
@@ -121,6 +174,121 @@ export const createWhatsAppService = ({
       });
     }, delayMs);
     reconnectTimer.unref?.();
+  };
+
+  const clearPairingQr = () => {
+    pairingQrDataUrl = null;
+    pairingQrExpiresAt = null;
+  };
+
+  const getPairingQr = () => {
+    if (pairingQrExpiresAt && Date.now() >= pairingQrExpiresAt) clearPairingQr();
+    return pairingQrDataUrl;
+  };
+
+  const stopCurrentSocket = () => {
+    const activeSocket = instanceSock;
+    instanceSock = null;
+    if (!activeSocket) return;
+    try {
+      activeSocket.ev?.removeAllListeners?.();
+      activeSocket.end?.(new Error('Baileys connection is being replaced by a manual reconnect.'));
+    } catch (error) {
+      serviceLogger.warn(`[WA] Could not cleanly close the previous socket: ${redactError(error)}`);
+    }
+  };
+
+  const preserveAuthDirectoryForPairing = async () => {
+    const authPath = resolve(authInfoPath);
+    try {
+      await fileSystem.stat(authPath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      await fileSystem.mkdir(authPath, { recursive: true, mode: 0o700 });
+      return null;
+    }
+
+    const backupPath = `${authPath}.backup-${Date.now()}-${randomUUID()}`;
+    await fileSystem.rename(authPath, backupPath);
+    await fileSystem.mkdir(authPath, { recursive: true, mode: 0o700 });
+    return basename(backupPath);
+  };
+
+  const reconnect = async ({ confirmRePair = false } = {}) => {
+    if (reconnectPromise) return reconnectPromise;
+    if (isUnsupportedServerlessRuntime()) {
+      return {
+        success: false,
+        message: SERVERLESS_RUNTIME_ERROR,
+        diagnostics: getDiagnostics()
+      };
+    }
+    if (connectionState === CONNECTION_STATES.LOGGED_OUT && !confirmRePair) {
+      return {
+        success: false,
+        rePairConfirmationRequired: true,
+        message: 'WhatsApp reported that this session is logged out. Re-pairing preserves the current authentication directory in a timestamped backup before starting a new pairing session.',
+        diagnostics: getDiagnostics()
+      };
+    }
+    if (confirmRePair && connectionState !== CONNECTION_STATES.LOGGED_OUT) {
+      return {
+        success: false,
+        message: 'A new pairing session is only allowed after WhatsApp reports the saved session as logged out.',
+        diagnostics: getDiagnostics()
+      };
+    }
+    if (
+      !confirmRePair &&
+      connectionState === CONNECTION_STATES.QR_REQUIRED &&
+      getPairingQr()
+    ) {
+      return {
+        success: true,
+        message: 'Scan the current QR code with WhatsApp to finish pairing.',
+        diagnostics: getDiagnostics()
+      };
+    }
+    if (!confirmRePair && connectionState === CONNECTION_STATES.CONNECTING) {
+      return {
+        success: true,
+        message: 'WhatsApp is already connecting.',
+        diagnostics: getDiagnostics()
+      };
+    }
+
+    reconnectPromise = (async () => {
+      let backupName = null;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      stopCurrentSocket();
+      clearPairingQr();
+      stopped = false;
+      authStateLoadFailed = false;
+      reconnectAttempt = 0;
+      connectionState = CONNECTION_STATES.DISCONNECTED;
+      authenticationValid = false;
+
+      if (confirmRePair) {
+        backupName = await preserveAuthDirectoryForPairing();
+      }
+
+      await initialize();
+      return {
+        success: true,
+        message: confirmRePair
+          ? 'The previous authentication directory was preserved. Scan the new QR code with WhatsApp to pair.'
+          : 'Reconnect started using the existing WhatsApp authentication data.',
+        backupName,
+        diagnostics: getDiagnostics()
+      };
+    })().finally(() => {
+      reconnectPromise = null;
+    });
+
+    return reconnectPromise;
   };
 
   const updateDeliveryReceipt = async (updates) => {
@@ -188,15 +356,17 @@ export const createWhatsAppService = ({
 
     initializationPromise = (async () => {
       connectionState = CONNECTION_STATES.CONNECTING;
+      authenticationValid = false;
       notifyWaiters();
       let authStateLoaded = false;
       try {
         const { state, saveCreds } = await authStateFactory(authInfoPath);
         authStateLoaded = true;
-        authenticationValid = Boolean(state.creds?.registered);
+        authenticationValid = Boolean(state?.creds?.registered);
+        if (stopped) return null;
         const newSock = socketFactory({
           auth: state,
-          logger: pino({ level: 'silent' }),
+          logger: createBaileysLogger(serviceLogger),
           printQRInTerminal: false,
           markOnlineOnConnect: false,
           syncFullHistory: false,
@@ -327,30 +497,53 @@ export const createWhatsAppService = ({
         newSock.ev.on('connection.update', (update) => {
           if (instanceSock !== newSock) return;
 
-          if (update.qr && !authenticationValid) {
-            serviceLogger.info('[WA] No paired session found; scan the QR code to connect WhatsApp:');
-            qrcode.generate(update.qr, { small: true });
+          if (update.qr) {
+            connectionState = CONNECTION_STATES.QR_REQUIRED;
+            authenticationValid = false;
+            clearPairingQr();
+            pairingQrExpiresAt = Date.now() + QR_TTL_MS;
+            notifyWaiters();
+            void QRCode.toDataURL(update.qr).then((dataUrl) => {
+              if (instanceSock !== newSock || connectionState !== CONNECTION_STATES.QR_REQUIRED) return;
+              pairingQrDataUrl = dataUrl;
+              notifyWaiters();
+            }).catch((error) => {
+              lastError = redactError(error);
+              serviceLogger.error('[WA] Could not prepare the pairing QR for the authenticated settings page.');
+            });
           }
 
           if (update.connection === 'open') {
-            connectionState = CONNECTION_STATES.CONNECTED;
             authenticationValid = Boolean(newSock.user);
+            connectionState = authenticationValid
+              ? CONNECTION_STATES.CONNECTED
+              : CONNECTION_STATES.DISCONNECTED;
             lastConnectionAt = new Date();
-            lastError = null;
-            reconnectAttempt = 0;
-            serviceLogger.info('[WA] Baileys connected and authenticated for assignment notifications.');
+            lastError = authenticationValid
+              ? null
+              : 'Baileys opened a connection without an authenticated WhatsApp account.';
+            clearPairingQr();
+            if (authenticationValid) reconnectAttempt = 0;
+            if (authenticationValid) {
+              serviceLogger.info('[WA] Baileys connected and authenticated for assignment notifications.');
+            } else {
+              serviceLogger.warn(`[WA] ${lastError}`);
+            }
             notifyWaiters();
-            void Promise.resolve(onReady()).catch((error) => {
-              lastError = redactError(error);
-              serviceLogger.error(`[WA_OUTBOX] Could not resume pending notifications: ${lastError}`);
-            });
+            if (authenticationValid) {
+              void Promise.resolve(onReady()).catch((error) => {
+                lastError = redactError(error);
+                serviceLogger.error(`[WA_OUTBOX] Could not resume pending notifications: ${lastError}`);
+              });
+            }
           }
 
           if (update.connection === 'close') {
             const statusCode = update.lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = statusCode === loggedOutCode;
             instanceSock = null;
-            if (isLoggedOut) authenticationValid = false;
+            authenticationValid = false;
+            clearPairingQr();
             connectionState = isLoggedOut
               ? CONNECTION_STATES.LOGGED_OUT
               : stopped
@@ -528,6 +721,9 @@ export const createWhatsAppService = ({
   const getDiagnostics = () => ({
     provider: 'Baileys (WhatsApp Web Multi-Device)',
     connectionStatus: connectionState,
+    qrRequired: connectionState === CONNECTION_STATES.QR_REQUIRED,
+    qrCodeDataUrl: connectionState === CONNECTION_STATES.QR_REQUIRED ? getPairingQr() : null,
+    qrExpiresAt: connectionState === CONNECTION_STATES.QR_REQUIRED ? pairingQrExpiresAt : null,
     authenticationValid,
     sendingCapabilityStatus: isReady() ? 'ready' : 'unavailable',
     hostingCompatibility: isUnsupportedServerlessRuntime() ? 'serverless_unsupported' : 'persistent_runtime',
@@ -566,6 +762,7 @@ export const createWhatsAppService = ({
 
   return {
     initialize,
+    reconnect,
     close,
     sendWhatsAppTaskNotification,
     getDiagnostics,
@@ -579,6 +776,7 @@ const whatsappService = createWhatsAppService();
 defaultWhatsAppService = whatsappService;
 
 export const initWhatsAppListener = () => whatsappService.initialize();
+export const reconnectWhatsApp = (options) => whatsappService.reconnect(options);
 export const closeWhatsAppListener = () => whatsappService.close();
 export const sendWhatsAppTaskNotification = (...args) =>
   whatsappService.sendWhatsAppTaskNotification(...args);

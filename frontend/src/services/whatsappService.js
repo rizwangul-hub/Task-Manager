@@ -12,11 +12,23 @@ export const whatsappService = {
     return apiClient.get('/whatsapp/diagnostics');
   },
 
+  getHistoryResetPreview() {
+    return apiClient.get('/whatsapp/history/reset-preview');
+  },
+
+  resetHistory() {
+    return apiClient.post('/whatsapp/history/reset', { confirmed: true });
+  },
+
   /**
    * Send test WhatsApp message
    */
   sendTestMessage(testNumber) {
     return apiClient.post('/whatsapp/test-message', { testNumber });
+  },
+
+  reconnect(confirmRePair = false) {
+    return apiClient.post('/whatsapp/reconnect', { confirmRePair });
   },
 
   /**

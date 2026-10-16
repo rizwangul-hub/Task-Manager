@@ -49,28 +49,41 @@ const server = httpServer.listen(env.PORT, () => {
 });
 
 // Handle graceful shutdown
-const shutdown = async (signal) => {
-  logger.info(`Received ${signal}. Gracefully shutting down server...`);
+let shutdownPromise = null;
+const shutdown = (signal, restart = false) => {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    logger.info(`Received ${signal}. Gracefully shutting down server...`);
 
-  schedulerService.stopScheduler();
-  await closeWhatsAppListener();
-  await socketService.close();
+    const forceExitTimer = setTimeout(() => {
+      logger.error('Forced shutdown due to timeout while closing connections.');
+      process.exit(1);
+    }, 10_000);
 
-  server.close(async () => {
-    logger.info('HTTP and WebSocket server closed.');
-    await disconnectDB();
-    process.exit(0);
-  });
-
-  // Force shutdown after timeout if pending connections hang
-  setTimeout(() => {
-    logger.error('Forced shutdown due to timeout while closing connections.');
-    process.exit(1);
-  }, 10000);
+    try {
+      schedulerService.stopScheduler();
+      await closeWhatsAppListener();
+      await socketService.close();
+      await new Promise((resolveClose) => server.close(resolveClose));
+      logger.info('HTTP and WebSocket server closed.');
+      await disconnectDB();
+      clearTimeout(forceExitTimer);
+      if (restart) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exit(0);
+    } catch (error) {
+      logger.error('Graceful shutdown failed:', error);
+      process.exit(1);
+    }
+  })();
+  return shutdownPromise;
 };
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.once('SIGUSR2', () => { void shutdown('SIGUSR2', true); });
 
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled Promise Rejection:', reason);

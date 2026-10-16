@@ -27,7 +27,8 @@ import {
   Pause,
   FlaskConical,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  RotateCcw
 } from 'lucide-react';
 
 export const SettingsPage = () => {
@@ -47,6 +48,7 @@ export const SettingsPage = () => {
   const [testWhatsAppNumber, setTestWhatsAppNumber] = useState('');
   const [testRecipientConsented, setTestRecipientConsented] = useState(false);
   const [sendingTestWhatsApp, setSendingTestWhatsApp] = useState(false);
+  const [reconnectingWhatsApp, setReconnectingWhatsApp] = useState(false);
 
   // WhatsApp Groups Monitoring State
   const [monitoredGroups, setMonitoredGroups] = useState([]);
@@ -276,6 +278,32 @@ export const SettingsPage = () => {
     }
   };
 
+  const handleReconnectWhatsApp = async () => {
+    setReconnectingWhatsApp(true);
+    try {
+      let response;
+      try {
+        response = await whatsappService.reconnect();
+      } catch (error) {
+        if (error.status !== 409 || !error.data?.data?.rePairConfirmationRequired) throw error;
+        const confirmed = window.confirm(
+          `${error.data.message}\n\nContinue? The existing authentication folder will be moved to a timestamped backup and will not be deleted.`
+        );
+        if (!confirmed) return;
+        response = await whatsappService.reconnect(true);
+      }
+      const backupNotice = response.data?.backupName
+        ? ` Previous authentication data was preserved as ${response.data.backupName}.`
+        : '';
+      toast.success(`${response.message || 'WhatsApp reconnect started.'}${backupNotice}`);
+      await fetchWhatsAppDiagnostics();
+    } catch (error) {
+      toast.error(error.message || 'Could not reconnect WhatsApp.');
+    } finally {
+      setReconnectingWhatsApp(false);
+    }
+  };
+
   return (
     <PageContainer
       title="System Settings"
@@ -333,15 +361,27 @@ export const SettingsPage = () => {
               <Phone size={18} className="card-title-icon" />
               <h3>WhatsApp Assignment Sender</h3>
             </div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              icon={RefreshCw}
-              onClick={fetchWhatsAppDiagnostics}
-            >
-              Refresh
-            </Button>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={RefreshCw}
+                onClick={fetchWhatsAppDiagnostics}
+              >
+                Refresh
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={RotateCcw}
+                isLoading={reconnectingWhatsApp}
+                onClick={handleReconnectWhatsApp}
+              >
+                Reconnect WhatsApp
+              </Button>
+            </div>
           </div>
 
           <div className="settings-diagnostics-list">
@@ -352,8 +392,9 @@ export const SettingsPage = () => {
               </div>
               <StatusBadge
                 status={whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
-                  whatsappDiagnostics?.connectionStatus === 'connecting' ? 'degraded' : 'offline'}
-                label={whatsappDiagnostics?.connectionStatus?.toUpperCase() || 'DISCONNECTED'}
+                  whatsappDiagnostics?.connectionStatus === 'connecting' ||
+                  whatsappDiagnostics?.connectionStatus === 'qr_required' ? 'degraded' : 'offline'}
+                label={whatsappDiagnostics?.connectionStatus?.replaceAll('_', ' ').toUpperCase() || 'DISCONNECTED'}
               />
             </div>
             <div className="diagnostic-row">
@@ -382,6 +423,26 @@ export const SettingsPage = () => {
               <p className="text-danger" role="status">
                 <strong>Hosting requirement:</strong> {whatsappDiagnostics.hostingCompatibilityMessage}
               </p>
+            )}
+            {whatsappDiagnostics?.qrRequired && (
+              <div className="whatsapp-pairing-panel" role="status">
+                <h4>Scan QR with WhatsApp</h4>
+                <p>
+                  On your phone, open WhatsApp → Linked devices → Link a device, then scan this code.
+                  The QR code expires; refresh or reconnect to request a new one.
+                </p>
+                {whatsappDiagnostics.qrCodeDataUrl ? (
+                  <img
+                    src={whatsappDiagnostics.qrCodeDataUrl}
+                    alt="Temporary WhatsApp device-linking QR code"
+                    width="240"
+                    height="240"
+                    style={{ display: 'block', maxWidth: '100%', background: 'white', padding: '0.5rem' }}
+                  />
+                ) : (
+                  <p className="text-muted">Preparing a temporary QR code…</p>
+                )}
+              </div>
             )}
             {(whatsappDiagnosticsError || whatsappDiagnostics?.lastError) && (
               <p className="text-danger" role="status">

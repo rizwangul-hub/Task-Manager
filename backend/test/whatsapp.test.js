@@ -37,7 +37,12 @@ const createMockBaileysSocket = ({ readyState = 0 } = {}) => {
   };
 };
 
-const createMockedWhatsAppService = ({ readyState = 0, authStateFactory, onReady = async () => {} } = {}) => {
+const createMockedWhatsAppService = ({
+  readyState = 0,
+  authStateFactory,
+  onReady = async () => {},
+  serviceLogger = { info() {}, warn() {}, error() {} }
+} = {}) => {
   let socket;
   const service = createWhatsAppService({
     authStateFactory: authStateFactory || (async () => ({
@@ -51,7 +56,7 @@ const createMockedWhatsAppService = ({ readyState = 0, authStateFactory, onReady
     sendReadyTimeoutMs: 10,
     reconnectDelaysMs: [60_000],
     onReady,
-    serviceLogger: { info() {}, warn() {}, error() {} }
+    serviceLogger
   });
   return { service, getSocket: () => socket };
 };
@@ -109,9 +114,9 @@ test('Baileys reports disconnected sends as retryable and does not create a comp
   await service.close();
 });
 
-test('Baileys restores registered credentials before opening its socket', async () => {
+test('saved registered credentials do not report an authenticated connection before socket open', async () => {
   let authPath;
-  const { service } = createMockedWhatsAppService({
+  const { service, getSocket } = createMockedWhatsAppService({
     authStateFactory: async (path) => {
       authPath = path;
       return {
@@ -122,7 +127,33 @@ test('Baileys restores registered credentials before opening its socket', async 
   });
   await service.initialize();
   assert.equal(typeof authPath, 'string');
+  assert.equal(service.getDiagnostics().connectionStatus, 'connecting');
+  assert.equal(service.getDiagnostics().authenticationValid, false);
+  getSocket().emit('connection.update', { connection: 'open' });
+  assert.equal(service.getDiagnostics().connectionStatus, 'connected');
   assert.equal(service.getDiagnostics().authenticationValid, true);
+  await service.close();
+});
+
+test('Baileys exposes a temporary QR code without logging the pairing contents', async () => {
+  const warnings = [];
+  const { service, getSocket } = createMockedWhatsAppService({
+    serviceLogger: { info() {}, warn(message) { warnings.push(message); }, error() {} }
+  });
+  await service.initialize();
+  getSocket().emit('connection.update', { qr: 'private-pairing-token' });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (service.getDiagnostics().qrCodeDataUrl) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  const diagnostics = service.getDiagnostics();
+  assert.equal(diagnostics.connectionStatus, 'qr_required');
+  assert.equal(diagnostics.qrRequired, true);
+  assert.match(diagnostics.qrCodeDataUrl, /^data:image\/png;base64,/);
+  assert.equal(typeof diagnostics.qrExpiresAt, 'number');
+  assert.equal(diagnostics.authenticationValid, false);
+  assert.equal(warnings.some((message) => message.includes('private-pairing-token')), false);
   await service.close();
 });
 
@@ -163,6 +194,137 @@ test('Baileys replaces stale sockets and sends only through the current connecti
   assert.equal(staleSocket.lastSent, undefined);
   assert.equal(currentSocket.lastSent.jid, '447123456789@s.whatsapp.net');
   assert.equal(readyCount, 2);
+  await service.close();
+});
+
+test('manual reconnect reuses saved authentication and creates only one replacement socket', async () => {
+  const sockets = [];
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      const socket = createMockBaileysSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  const originalSocket = await service.initialize();
+  const result = await service.reconnect();
+
+  assert.equal(sockets.length, 2);
+  assert.notEqual(result.diagnostics.connectionStatus, 'connected');
+  assert.notEqual(service.getSocket(), originalSocket);
+  assert.equal(result.message, 'Reconnect started using the existing WhatsApp authentication data.');
+  await service.close();
+});
+
+test('re-pairing requires confirmation and preserves the old auth directory as a backup', async () => {
+  const fileSystemCalls = [];
+  let socketCount = 0;
+  const service = createWhatsAppService({
+    authInfoPath: 'auth_info_baileys',
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      socketCount += 1;
+      return createMockBaileysSocket();
+    },
+    fileSystem: {
+      async stat(path) { fileSystemCalls.push(['stat', path]); },
+      async rename(source, destination) { fileSystemCalls.push(['rename', source, destination]); },
+      async mkdir(path) { fileSystemCalls.push(['mkdir', path]); }
+    },
+    loggedOutCode: 401,
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  const socket = await service.initialize();
+  socket.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 401 } } }
+  });
+  const confirmation = await service.reconnect();
+  assert.equal(confirmation.rePairConfirmationRequired, true);
+  assert.equal(socketCount, 1);
+  assert.equal(fileSystemCalls.length, 0);
+
+  const result = await service.reconnect({ confirmRePair: true });
+  assert.equal(result.success, true);
+  assert.match(result.backupName, /^auth_info_baileys\.backup-/);
+  assert.equal(fileSystemCalls.some(([operation]) => operation === 'rename'), true);
+  assert.equal(fileSystemCalls.some(([operation]) => operation === 'mkdir'), true);
+  assert.equal(socketCount, 2);
+  await service.close();
+});
+
+test('repeated Baileys Bad MAC errors are sanitized and rate limited', async () => {
+  const warnings = [];
+  let baileysLogger;
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: (options) => {
+      baileysLogger = options.logger;
+      return createMockBaileysSocket();
+    },
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn(message) { warnings.push(message); }, error() {} }
+  });
+  await service.initialize();
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    baileysLogger.error({ msg: 'Session error: Bad MAC', key: 'private-session-material' });
+  }
+
+  const cryptoWarnings = warnings.filter((message) => message.includes('[WA_CRYPTO]'));
+  assert.equal(cryptoWarnings.length, 1);
+  assert.match(cryptoWarnings[0], /saved session was not changed/);
+  assert.doesNotMatch(cryptoWarnings[0], /private-session-material|Bad MAC/);
+  assert.equal(service.getDiagnostics().connectionStatus, 'connecting');
+  await service.close();
+});
+
+test('automatic reconnection stops after the configured attempt limit', async () => {
+  const sockets = [];
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      const socket = createMockBaileysSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    maxReconnectAttempts: 1,
+    reconnectDelaysMs: [0],
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+  const initialSocket = await service.initialize();
+  initialSocket.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 408 } } }
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(sockets.length, 2);
+  sockets[1].emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 408 } } }
+  });
+
+  assert.match(service.getDiagnostics().lastError, /Automatic reconnection stopped/);
+  assert.equal(sockets.length, 2);
   await service.close();
 });
 

@@ -3,6 +3,7 @@ import { authenticate, authorize } from '../middleware/auth.middleware.js';
 import { USER_ROLES } from '../models/user.model.js';
 import {
   getWhatsAppDiagnostics,
+  reconnectWhatsApp,
   sendWhatsAppTaskNotification,
   normalizeWhatsAppPhoneNumber
 } from '../services/whatsappService.js';
@@ -15,6 +16,7 @@ const router = Router();
 router.use(authenticate);
 
 const ownerOnly = authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER);
+const adminOnly = authorize(USER_ROLES.ADMIN);
 
 /**
  * Diagnostics & Connection
@@ -22,10 +24,31 @@ const ownerOnly = authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER);
  */
 router.get('/diagnostics', ownerOnly, (req, res) => {
   const diagnostics = getWhatsAppDiagnostics();
+  res.set('Cache-Control', 'no-store, private');
   res.status(200).json({
     status: 'success',
     data: { diagnostics }
   });
+});
+
+router.post('/reconnect', ownerOnly, async (req, res, next) => {
+  try {
+    const result = await reconnectWhatsApp({
+      confirmRePair: req.body?.confirmRePair === true
+    });
+    res.set('Cache-Control', 'no-store, private');
+    res.status(result.rePairConfirmationRequired ? 409 : result.success ? 200 : 503).json({
+      status: result.success ? 'success' : 'fail',
+      message: result.message,
+      data: {
+        rePairConfirmationRequired: Boolean(result.rePairConfirmationRequired),
+        backupName: result.backupName || null,
+        diagnostics: result.diagnostics
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 /**
@@ -35,6 +58,8 @@ router.get('/diagnostics', ownerOnly, (req, res) => {
  */
 router.get('/groups', ownerOnly, whatsappDraftController.getGroups);
 router.post('/monitored-groups', ownerOnly, whatsappDraftController.toggleMonitoredGroup);
+router.get('/history/reset-preview', adminOnly, whatsappDraftController.getHistoryResetPreview);
+router.post('/history/reset', adminOnly, whatsappDraftController.resetHistory);
 router.post('/test-gemini', ownerOnly, whatsappDraftController.testGemini);
 router.post('/test-sample-message', ownerOnly, whatsappDraftController.testSampleMessage);
 
