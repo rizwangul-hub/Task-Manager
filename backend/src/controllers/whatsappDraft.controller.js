@@ -59,6 +59,13 @@ export const whatsappDraftController = {
           adminId: req.user._id.toString(),
           tasks: result.tasks,
           drafts: result.drafts,
+          taskEvents: result.taskEvents,
+          comments: result.comments,
+          timeEntries: result.timeEntries,
+          whatsappNotifications: result.whatsappNotifications,
+          notifications: result.notifications,
+          notificationOutbox: result.notificationOutbox,
+          groupsUpdated: result.groupsUpdated,
           startedAt: result.startedAt.toISOString()
         });
         res.status(200).json({

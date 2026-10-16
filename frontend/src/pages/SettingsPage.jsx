@@ -313,7 +313,11 @@ export const SettingsPage = () => {
     setLoadingHistoryResetPreview(true);
     try {
       const response = await whatsappService.getHistoryResetPreview();
-      setResetPreview(response.data?.preview || null);
+      const preview = response.data?.preview;
+      if (!preview || !Number.isInteger(preview.tasks) || !Number.isInteger(preview.drafts)) {
+        throw new Error('WhatsApp reset preview returned invalid task or draft counts.');
+      }
+      setResetPreview(preview);
       setConfirmHistoryReset(false);
       setShowHistoryResetModal(true);
     } catch (error) {
@@ -1122,6 +1126,12 @@ export const SettingsPage = () => {
           Manually created tasks, users, assignments on other tasks, company settings, the linked WhatsApp
           session, and unrelated data will remain untouched. Messages timestamped at or before the reset
           checkpoint will be ignored, including messages delivered after a backend restart.
+        </p>
+        <p className="text-sm text-muted">
+          Current processing checkpoint:{' '}
+          {resetPreview?.processingStartedAt
+            ? new Date(resetPreview.processingStartedAt).toLocaleString()
+            : 'not set; this reset will establish it'}
         </p>
         <label className="pref-toggle-item" style={{ marginTop: '1rem' }}>
           <input
