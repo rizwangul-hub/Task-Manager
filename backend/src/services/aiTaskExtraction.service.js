@@ -579,18 +579,22 @@ export async function extractTaskFromWhatsAppMessage(
   // Prioritize Gemini if configured or requested
   if ((preferredProvider === 'gemini' || (!process.env.AI_PROVIDER && geminiKey)) && geminiKey) {
     try {
+      logger.info(`[WA_EXTRACT] Initiating AI task extraction with Google Gemini REST API (model: ${process.env.GEMINI_MODEL || 'gemini-2.5-flash'})...`);
       rawOutput = await callGemini(geminiKey, text, context);
       providerUsed = 'gemini';
     } catch (err) {
-      logger.warn(`[AI_EXTRACTOR] Gemini extraction failed, falling back to heuristic: ${err.message}`);
+      logger.warn(`[WA_EXTRACT] Gemini extraction failed, falling back to heuristic: ${err.message}`);
     }
   } else if ((preferredProvider === 'openai' || (!preferredProvider && openAiKey)) && openAiKey) {
     try {
+      logger.info('[WA_EXTRACT] Initiating AI task extraction with OpenAI API...');
       rawOutput = await callOpenAI(openAiKey, text, context);
       providerUsed = 'openai';
     } catch (err) {
-      logger.warn(`[AI_EXTRACTOR] OpenAI extraction failed, falling back to heuristic: ${err.message}`);
+      logger.warn(`[WA_EXTRACT] OpenAI extraction failed, falling back to heuristic: ${err.message}`);
     }
+  } else {
+    logger.info('[WA_EXTRACT] GEMINI_API_KEY is not configured; using rule-based heuristic extractor.');
   }
 
   if (!rawOutput) {

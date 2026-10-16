@@ -1,6 +1,8 @@
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
+  Browsers,
   WAMessageStatus
 } from '@whiskeysockets/baileys';
 import { randomUUID } from 'node:crypto';
@@ -18,6 +20,18 @@ const CONNECTION_STATES = {
   LOGGED_OUT: 'logged_out',
   QR_REQUIRED: 'qr_required',
   STOPPED: 'stopped'
+};
+
+const MAX_MESSAGE_CACHE_SIZE = 1000;
+const recentMessageStore = new Map();
+
+export const cacheRecentWhatsAppMessage = (keyId, messageProto) => {
+  if (!keyId || !messageProto) return;
+  if (recentMessageStore.size >= MAX_MESSAGE_CACHE_SIZE) {
+    const oldestKey = recentMessageStore.keys().next().value;
+    recentMessageStore.delete(oldestKey);
+  }
+  recentMessageStore.set(keyId, messageProto);
 };
 
 export const normalizeWhatsAppPhoneNumber = (target) => {
@@ -265,31 +279,67 @@ export const createWhatsAppService = ({
   };
 
   const processInboundMessage = async (msg) => {
-    if (msg.key?.fromMe) return;
     const remoteJid = msg.key?.remoteJid || '';
-    if (!remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') return;
+    const messageId = msg.key?.id || 'unknown';
+    const isGroup = remoteJid.endsWith('@g.us');
+    const fromMe = Boolean(msg.key?.fromMe);
+    const senderJid = msg.key?.participant || msg.participant || remoteJid;
+    const senderName = msg.pushName || '';
+
+    if (!isGroup || remoteJid === 'status@broadcast') {
+      return;
+    }
+
+    serviceLogger.info(
+      `[WA_INBOUND_MSG] Inbound group message detected: id=${messageId}, group=${remoteJid}, sender=${senderName || senderJid}, fromMe=${fromMe}`
+    );
+
+    if (fromMe) {
+      if (process.env.WHATSAPP_IGNORE_FROM_ME === 'true') {
+        serviceLogger.info(
+          `[WA_INBOUND_FILTER] Message ${messageId} ignored: Sent by own account (fromMe=true) and WHATSAPP_IGNORE_FROM_ME is true.`
+        );
+        return;
+      }
+      serviceLogger.info(
+        `[WA_INBOUND_MSG] Message ${messageId} sent by connected manager account (fromMe=true) in group ${remoteJid}. Processing instructions.`
+      );
+    }
 
     const messageTimestamp = getWhatsAppMessageTimestamp(msg);
     if (!messageTimestamp) {
-      serviceLogger.warn('[WA_INBOUND_IGNORED] Message has no valid provider timestamp.');
+      serviceLogger.warn(`[WA_INBOUND_FILTER] Message ${messageId} in ${remoteJid} ignored: No valid provider timestamp.`);
       return;
     }
     const checkpoint = await getInboundCheckpoint();
     if (!isAfterWhatsAppProcessingCheckpoint(messageTimestamp, checkpoint)) {
-      serviceLogger.info('[WA_INBOUND_OLD] Message predates the current processing checkpoint; skipping.');
+      serviceLogger.info(
+        `[WA_INBOUND_FILTER] Message ${messageId} in ${remoteJid} ignored: Timestamp (${messageTimestamp.toISOString()}) predates processing checkpoint (${checkpoint ? new Date(checkpoint).toISOString() : 'none'}).`
+      );
       return;
     }
 
     const messageText = extractFullMessageText(msg);
-    if (!messageText) return;
-    const messageId = msg.key?.id;
-    if (!messageId) return;
+    if (!messageText) {
+      serviceLogger.warn(
+        `[WA_INBOUND_FILTER] Message ${messageId} in ${remoteJid} ignored: Empty or undecryptable text payload (Bad MAC or non-text message).`
+      );
+      return;
+    }
 
     const monitored = await findMonitoredGroup(remoteJid);
-    if (!monitored || monitored.isPaused) return;
-
-    const senderJid = msg.key?.participant || msg.participant || remoteJid;
-    const senderName = msg.pushName || '';
+    if (!monitored) {
+      serviceLogger.info(
+        `[WA_INBOUND_FILTER] Message ${messageId} ignored: Group ${remoteJid} is not configured for monitoring in MongoDB. Enable it in Manager Dashboard or Settings to process tasks.`
+      );
+      return;
+    }
+    if (monitored.isPaused) {
+      serviceLogger.info(
+        `[WA_INBOUND_FILTER] Message ${messageId} ignored: Group "${monitored.groupName || remoteJid}" is currently paused.`
+      );
+      return;
+    }
 
     if (inboundDependencies.updateGroupLastMessageAt) {
       await inboundDependencies.updateGroupLastMessageAt(remoteJid, messageTimestamp);
@@ -309,7 +359,7 @@ export const createWhatsAppService = ({
       existing = await TaskDraft.findOne({ groupJid: remoteJid, messageId });
     }
     if (existing) {
-      serviceLogger.info(`[WA_INBOUND_DUP] Message ${messageId} in ${remoteJid} already drafted; skipping.`);
+      serviceLogger.info(`[WA_INBOUND_DUP] Message ${messageId} in "${monitored.groupName || remoteJid}" already drafted (status: ${existing.status}); skipping duplicate.`);
       return;
     }
 
@@ -342,10 +392,14 @@ export const createWhatsAppService = ({
       throw createErr;
     }
 
-    serviceLogger.info(`[WA_INBOUND_DRAFT_CREATED] Draft recorded for message ${messageId} from ${senderName || senderJid}`);
+    serviceLogger.info(`[WA_DRAFT_INIT] Draft record created for message ${messageId} from "${senderName || senderJid}" in "${monitored.groupName || remoteJid}"`);
 
     const extractionTask = (async () => {
       try {
+        serviceLogger.info(
+          `[WA_EXTRACT_START] Analyzing text (${messageText.length} chars) from "${senderName || senderJid}" in "${monitored.groupName || remoteJid}": "${messageText.slice(0, 60)}..."`
+        );
+
         let extraction;
         let provider;
         if (inboundDependencies.extractTask) {
@@ -372,13 +426,21 @@ export const createWhatsAppService = ({
         draft.status = newStatus;
         draft.extractorProvider = provider;
         await draft.save();
-        serviceLogger.info(`[WA_INBOUND_AI_DONE] Extracted task draft for ${messageId} using ${provider} (status: ${newStatus}).`);
+
+        serviceLogger.info(
+          `[WA_EXTRACT_RESULT] Extraction complete for message ${messageId}: isTask=${extraction.isTask}, title="${extraction.title}", priority=${extraction.priority}, confidence=${extraction.confidence}, provider=${provider}, status=${newStatus}`
+        );
+        serviceLogger.info(
+          `[WA_DRAFT_PERSISTED] Task draft ${draft._id} persisted in MongoDB with status "${newStatus}". Awaiting manager review.`
+        );
+
         if (inboundDependencies.broadcastDraft) {
           await inboundDependencies.broadcastDraft('whatsapp:draft_created', draft);
         } else {
           const { socketService } = await import('./socket.service.js');
           socketService.broadcast('whatsapp:draft_created', draft);
         }
+        serviceLogger.info(`[WA_BROADCAST] Broadcasted "whatsapp:draft_created" for draft ${draft._id} to real-time clients.`);
       } catch (aiErr) {
         serviceLogger.error(`[WA_INBOUND_AI_ERROR] Extraction failed for ${messageId}: ${redactError(aiErr)}`);
         draft.status = 'failed';
@@ -634,14 +696,29 @@ export const createWhatsAppService = ({
         authStateLoaded = true;
         authenticationValid = false;
         if (stopped) return null;
+
+        serviceLogger.info('[WA_STATE] WhatsApp connection state: CONNECTING (Establishing Baileys socket)');
+
+        // Wrap state.keys with makeCacheableSignalKeyStore to eliminate Signal ratchet race conditions on disk
+        const authKeys = state.keys
+          ? makeCacheableSignalKeyStore(state.keys, createBaileysLogger(serviceLogger))
+          : undefined;
+        const authConfig = authKeys ? { creds: state.creds, keys: authKeys } : state;
+
         releaseCryptoConsoleFilter ??= installCryptoConsoleErrorFilter(serviceLogger);
         const newSock = socketFactory({
-          auth: state,
+          auth: authConfig,
           logger: createBaileysLogger(serviceLogger),
           printQRInTerminal: false,
           markOnlineOnConnect: false,
           syncFullHistory: false,
-          getMessage: async () => ({ conversation: '' })
+          browser: Browsers.ubuntu('Chrome'),
+          getMessage: async (key) => {
+            if (key?.id && recentMessageStore.has(key.id)) {
+              return recentMessageStore.get(key.id);
+            }
+            return undefined;
+          }
         });
         instanceSock = newSock;
 
@@ -660,7 +737,13 @@ export const createWhatsAppService = ({
         });
 
         newSock.ev.on('messages.upsert', ({ messages, type }) => {
-          if (type !== 'notify' || !Array.isArray(messages)) return;
+          if (!Array.isArray(messages)) return;
+          for (const message of messages) {
+            if (message.key?.id && message.message) {
+              cacheRecentWhatsAppMessage(message.key.id, message.message);
+            }
+          }
+          serviceLogger.info(`[WA_INBOUND_RAW] Upsert event received: type=${type}, messageCount=${messages.length}`);
           void enqueueInboundWork(async () => {
             for (const message of messages) {
               try {
@@ -672,7 +755,6 @@ export const createWhatsAppService = ({
           });
         });
 
-
         newSock.ev.on('connection.update', (update) => {
           if (instanceSock !== newSock) return;
 
@@ -680,6 +762,7 @@ export const createWhatsAppService = ({
             connectionState = CONNECTION_STATES.QR_REQUIRED;
             authenticationValid = false;
             clearPairingQr();
+            serviceLogger.info('[WA_STATE] WhatsApp connection state: QR_REQUIRED (Pairing QR generated)');
             notifyWaiters();
             void (async () => {
               try {
@@ -719,7 +802,9 @@ export const createWhatsAppService = ({
             pairingBackupConfirmed = false;
             if (authenticationValid) reconnectAttempt = 0;
             if (authenticationValid) {
-              serviceLogger.info('[WA] Baileys connected and authenticated for assignment notifications.');
+              serviceLogger.info(
+                `[WA_STATE] WhatsApp connection state: CONNECTED (Authenticated as "${newSock.user?.name || 'Manager'}", JID: ${newSock.user?.id || 'none'}, LID: ${newSock.user?.lid || 'none'})`
+              );
             } else {
               serviceLogger.warn(`[WA] ${lastError}`);
             }
@@ -753,7 +838,14 @@ export const createWhatsAppService = ({
                 ? `WhatsApp connection closed (${reasonName || statusCode}).`
                 : 'WhatsApp connection closed.';
             lastDisconnectionReason = lastError;
-            serviceLogger.warn(`[WA] Connection closed; state=${connectionState}.`);
+            serviceLogger.warn(
+              `[WA_STATE] WhatsApp connection state: ${connectionState.toUpperCase()} (Reason: ${reasonName || statusCode || 'Unknown'}, StatusCode: ${statusCode || 'none'})`
+            );
+            if (statusCode === DisconnectReason.connectionReplaced) {
+              serviceLogger.warn(
+                '[WA_STATE] Connection was replaced by another active session or dev process. Backing off reconnection to avoid collision.'
+              );
+            }
             notifyWaiters();
             if (!isLoggedOut && !stopped) scheduleReconnect();
           }
@@ -893,8 +985,10 @@ export const createWhatsAppService = ({
         return { success: false, retryable: true, reason, error: reason };
       }
 
-      serviceLogger.info(`[WA_SEND_ATTEMPT] Sending assignment notification to ${redactPhoneNumber(targetJid)}.`);
       const sent = await activeSock.sendMessage(targetJid, { text: messageText.trim() });
+      if (sent?.key?.id) {
+        cacheRecentWhatsAppMessage(sent.key.id, { conversation: messageText.trim() });
+      }
       serviceLogger.info(`[WA_OUTBOUND_SUCCESS] Notification accepted by Baileys for ${redactPhoneNumber(targetJid)}.`);
       lastSuccessfulSendAt = new Date();
       lastError = null;
