@@ -674,6 +674,7 @@ test('reset waits for active extraction and checkpoint rejects replayed messages
   const inboundDependencies = {
     getCheckpoint: async () => checkpoint,
     findMonitoredGroup: async () => ({ groupName: 'Operations Group', isPaused: false }),
+    updateGroupLastMessageAt: async () => {},
     findDraft: async (groupJid, messageId) =>
       drafts.find((draft) => draft.groupJid === groupJid && draft.messageId === messageId),
     createDraft: async (draftData) => {
