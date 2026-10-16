@@ -63,7 +63,7 @@ class ApiClient {
 
     // Attach Bearer token from local storage if available for cross-domain resilience
     const token = this.getToken();
-    if (token && !headers['Authorization']) {
+    if (token && !Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')) {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
@@ -88,7 +88,12 @@ class ApiClient {
       }
 
       // If unauthorized and not already an auth endpoint or retry, attempt silent token refresh
-      if (response.status === 401 && !isRetry && !endpoint.includes('/auth/login')) {
+      if (
+        response.status === 401 &&
+        !isRetry &&
+        !endpoint.includes('/auth/login') &&
+        !endpoint.includes('/auth/refresh')
+      ) {
         try {
           await this.refreshToken();
           return await this.request(endpoint, options, true);

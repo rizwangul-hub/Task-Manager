@@ -49,6 +49,57 @@ MongoDB and `AUTH_INFO_PATH`, and mount the existing authentication directory
 as private persistent storage. Run a single backend instance for the paired
 WhatsApp account. The frontend may remain on Vercel.
 
+## Production configuration and diagnostics
+
+Set the frontend build variable `VITE_API_URL` to the backend API base URL,
+including `/api` (for example, `https://api.example.com/api`). If Socket.IO is
+hosted separately from that URL, set `VITE_SOCKET_URL` to its origin.
+
+Configure the backend with:
+
+- `MONGODB_URI` for the existing MongoDB database.
+- `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` as distinct, stable, private
+  values of at least 32 characters. Keep them identical across backend
+  processes; never use development/example values in production.
+- `FRONTEND_URL` as the exact deployed frontend origin, and `FRONTEND_URLS`
+  for any additional trusted origins. Do not include `/` or a path.
+- `COOKIE_SECURE=true` and `COOKIE_SAME_SITE=none` when the frontend and API
+  are on different sites. The frontend also sends its stored access token as a
+  bearer credential because browsers may block cross-site cookies.
+- `AUTH_INFO_PATH` pointed at a private persistent volume mounted at the
+  existing Baileys auth directory. Do not point separate instances at competing
+  copies of this directory.
+- `ENABLE_WHATSAPP=true` (or leave unset) to enable the connection. Set
+  `NODE_ENV=production`.
+- `GEMINI_API_KEY` and optionally `GEMINI_MODEL`/`AI_PROVIDER=gemini` if Gemini
+  extraction is desired. Without an AI key, the existing rule-based extractor
+  is used; transient Gemini failures are recorded on the resulting draft when
+  that fallback succeeds.
+
+`GET /api/whatsapp/diagnostics` requires a valid signed-in Admin or Manager
+session. A 401 means the backend did not accept an access token; sign in again
+if both the bearer token and cookie are expired or invalid. A 403 means the
+session is valid but the account role cannot access WhatsApp settings. The
+middleware prefers a valid bearer token and falls back to the access cookie,
+so an old cookie no longer overrides a refreshed frontend token. Browser
+storage is scoped to the frontend origin: users opening a newly deployed
+Vercel hostname may need to sign in again.
+
+Diagnostics are process-local by design. Only the designated
+`NODE_APP_INSTANCE=0` worker starts Baileys when using a Node cluster, while
+other workers serve API requests without that socket. A `non_owner_worker`
+diagnostic means requests are reaching a worker that does not own the
+connection. For this deployment, use one persistent backend process/replica;
+do not scale it horizontally unless the WhatsApp socket and diagnostics are
+moved into a dedicated shared worker service.
+
+The status endpoint reports this process's live socket, not just the saved
+credentials. A transient Baileys/libsignal decryption error affects the
+individual message that could not be decrypted; it is not treated as proof of
+logout and does not trigger auth-file changes. Incoming task capture accepts
+only real-time `notify` upserts from monitored, unpaused groups; it does not
+import history or create duplicate drafts for the same group/message key.
+
 ## Pair or reconnect from Settings
 
 Open **System Settings → WhatsApp Assignment Sender**. Use **Reconnect WhatsApp**

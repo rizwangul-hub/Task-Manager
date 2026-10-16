@@ -140,6 +140,7 @@ test('Phase 4 - Protected notification routes reject unauthenticated requests wi
 
   const fakeId = '507f191e810c19729de860ea';
   const endpoints = [
+    { method: 'GET', path: '/api/whatsapp/diagnostics' },
     { method: 'GET', path: '/api/notifications' },
     { method: 'GET', path: '/api/notifications/unread-count' },
     { method: 'GET', path: '/api/notifications/preferences' },

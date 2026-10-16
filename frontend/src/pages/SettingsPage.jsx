@@ -45,6 +45,7 @@ export const SettingsPage = () => {
   const [savingProfile, setSavingProfile] = useState(false);
   const [whatsappDiagnostics, setWhatsAppDiagnostics] = useState(null);
   const [whatsappDiagnosticsError, setWhatsAppDiagnosticsError] = useState('');
+  const [whatsappDiagnosticsErrorStatus, setWhatsAppDiagnosticsErrorStatus] = useState(null);
   const [testWhatsAppNumber, setTestWhatsAppNumber] = useState('');
   const [testRecipientConsented, setTestRecipientConsented] = useState(false);
   const [sendingTestWhatsApp, setSendingTestWhatsApp] = useState(false);
@@ -159,7 +160,13 @@ export const SettingsPage = () => {
         sampleMessage: sampleMessageText.trim(),
         senderName: sampleSenderName.trim()
       });
-      setSampleResult(res.data);
+      const raw = res.data || {};
+      const extraction = raw.extraction || raw;
+      setSampleResult({
+        ...extraction,
+        provider: raw.provider || extraction.modelUsed || 'heuristic',
+        modelUsed: extraction.modelUsed || raw.provider || 'heuristic'
+      });
       toast.success('Sample message analyzed with Gemini!');
     } catch (err) {
       toast.error(err.message || 'Failed to analyze sample message.');
@@ -213,8 +220,11 @@ export const SettingsPage = () => {
       const response = await whatsappService.getDiagnostics();
       setWhatsAppDiagnostics(response.data?.diagnostics || null);
       setWhatsAppDiagnosticsError('');
+      setWhatsAppDiagnosticsErrorStatus(null);
     } catch (error) {
+      setWhatsAppDiagnostics(null);
       setWhatsAppDiagnosticsError(error.message || 'WhatsApp diagnostics are unavailable.');
+      setWhatsAppDiagnosticsErrorStatus(error.status || null);
     }
   }, []);
 
@@ -435,10 +445,13 @@ export const SettingsPage = () => {
                 <span className="diagnostic-desc">{whatsappDiagnostics?.provider || 'Baileys (WhatsApp Web Multi-Device)'}</span>
               </div>
               <StatusBadge
-                status={whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
+                status={whatsappDiagnosticsError ? 'degraded' :
+                  whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
                   whatsappDiagnostics?.connectionStatus === 'connecting' ||
                   whatsappDiagnostics?.connectionStatus === 'qr_required' ? 'degraded' : 'offline'}
-                label={whatsappDiagnostics?.connectionStatus?.replaceAll('_', ' ').toUpperCase() || 'DISCONNECTED'}
+                label={whatsappDiagnosticsError
+                  ? whatsappDiagnosticsErrorStatus === 401 ? 'AUTH REQUIRED' : 'UNAVAILABLE'
+                  : whatsappDiagnostics?.connectionStatus?.replaceAll('_', ' ').toUpperCase() || 'DISCONNECTED'}
               />
             </div>
             <div className="diagnostic-row">
@@ -447,8 +460,10 @@ export const SettingsPage = () => {
                 <span className="diagnostic-desc">Paired Baileys session authorization status</span>
               </div>
               <StatusBadge
-                status={whatsappDiagnostics?.authenticationValid ? 'healthy' : 'offline'}
-                label={whatsappDiagnostics?.authenticationValid ? 'VALID' : 'NOT READY'}
+                status={whatsappDiagnosticsError ? 'degraded' : whatsappDiagnostics?.authenticationValid ? 'healthy' : 'offline'}
+                label={whatsappDiagnosticsError
+                  ? whatsappDiagnosticsErrorStatus === 401 ? 'AUTH REQUIRED' : 'UNAVAILABLE'
+                  : whatsappDiagnostics?.authenticationValid ? 'VALID' : 'NOT READY'}
               />
             </div>
             <p className="text-sm text-muted">
@@ -1067,9 +1082,12 @@ export const SettingsPage = () => {
                 <span className="diagnostic-desc">Baileys multi-device notification sender</span>
               </div>
               <StatusBadge
-                status={whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
+                status={whatsappDiagnosticsError ? 'degraded' :
+                  whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
                   whatsappDiagnostics?.connectionStatus === 'connecting' ? 'degraded' : 'offline'}
-                label={whatsappDiagnostics?.connectionStatus?.toUpperCase() || 'DISCONNECTED'}
+                label={whatsappDiagnosticsError
+                  ? whatsappDiagnosticsErrorStatus === 401 ? 'AUTH REQUIRED' : 'UNAVAILABLE'
+                  : whatsappDiagnostics?.connectionStatus?.toUpperCase() || 'DISCONNECTED'}
               />
             </div>
 

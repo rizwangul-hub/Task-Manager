@@ -566,6 +566,37 @@ test('WhatsApp diagnostics explain when Vercel serverless cannot host Baileys', 
   }
 });
 
+test('WhatsApp diagnostics identify workers that do not own the Baileys socket', async () => {
+  const previousInstance = process.env.NODE_APP_INSTANCE;
+  process.env.NODE_APP_INSTANCE = '1';
+  try {
+    let socketCreations = 0;
+    const service = createWhatsAppService({
+      authStateFactory: async () => ({
+        state: { creds: { registered: true } },
+        saveCreds: async () => {}
+      }),
+      socketFactory: () => {
+        socketCreations += 1;
+        return createMockBaileysSocket({ readyState: 1 });
+      },
+      serviceLogger: { info() {}, warn() {}, error() {} }
+    });
+
+    assert.equal(await service.initialize(), null);
+    const diagnostics = service.getDiagnostics();
+    assert.equal(diagnostics.connectionStatus, 'disconnected');
+    assert.equal(diagnostics.instanceRole, 'non_owner');
+    assert.equal(diagnostics.hostingCompatibility, 'non_owner_worker');
+    assert.match(diagnostics.hostingCompatibilityMessage, /single backend process/);
+    assert.equal(socketCreations, 0);
+    await service.close();
+  } finally {
+    if (previousInstance === undefined) delete process.env.NODE_APP_INSTANCE;
+    else process.env.NODE_APP_INSTANCE = previousInstance;
+  }
+});
+
 test('sendWhatsAppTaskNotification safely validates empty inputs and recipient format', async () => {
   // Empty text
   const emptyText = await sendWhatsAppTaskNotification('923255984244', '');
@@ -596,6 +627,7 @@ test('WhatsApp checkpoint rejects old, equal, and missing timestamps', () => {
 test('inbound notify events create one review draft for a new message and ignore old/history duplicates', async () => {
   const checkpoint = new Date('2026-10-16T03:30:00.000Z');
   const drafts = [];
+  const logMessages = [];
   const service = createWhatsAppService({
     authStateFactory: async () => ({
       state: { creds: { registered: true } },
@@ -617,11 +649,16 @@ test('inbound notify events create one review draft for a new message and ignore
       },
       extractTask: async () => ({
         extraction: { isTask: true, confidence: 0.9, missingInformation: [] },
-        provider: 'test'
+        provider: 'test',
+        fallbackReason: 'Gemini extraction failed (HTTP 401); rule-based fallback was used.'
       }),
       broadcastDraft: async () => {}
     },
-    serviceLogger: { info() {}, warn() {}, error() {} }
+    serviceLogger: {
+      info(...args) { logMessages.push(args.join(' ')); },
+      warn(...args) { logMessages.push(args.join(' ')); },
+      error(...args) { logMessages.push(args.join(' ')); }
+    }
   });
 
   await service.initialize();
@@ -655,11 +692,26 @@ test('inbound notify events create one review draft for a new message and ignore
   assert.equal(drafts[0].senderJid, 'sender@s.whatsapp.net');
   assert.equal(drafts[0].messageTimestamp.toISOString(), '2026-10-16T03:31:00.000Z');
   assert.equal(drafts[0].aiExtraction.isTask, true);
+  assert.match(drafts[0].processingError, /Gemini extraction failed/);
 
   socket.emit('messages.upsert', { type: 'notify', messages: [newMessage] });
   socket.emit('messages.upsert', { type: 'append', messages: [newMessage] });
+  socket.emit('messages.upsert', {
+    type: 'append',
+    messages: [{
+      ...newMessage,
+      key: { ...newMessage.key, id: 'history-append' },
+      message: { conversation: 'Historical message should not be processed' }
+    }]
+  });
   await service.waitForInboundProcessing();
   assert.equal(drafts.length, 1);
+  assert.equal(logMessages.some((entry) =>
+    entry.includes('Please update the project tracker') ||
+    entry.includes('Historical message should not be processed') ||
+    entry.includes('sender@s.whatsapp.net') ||
+    entry.includes(groupJid)
+  ), false);
 
   await service.close();
 });

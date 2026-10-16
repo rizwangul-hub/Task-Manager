@@ -9,7 +9,8 @@ import {
   validateExtractionOutput,
   parseRelativeDate,
   callGemini,
-  testGeminiConnectivity
+  testGeminiConnectivity,
+  extractTaskFromWhatsAppMessage
 } from '../src/services/aiTaskExtraction.service.js';
 import { TASK_DRAFT_STATUSES } from '../src/models/taskDraft.model.js';
 
@@ -429,6 +430,44 @@ test('16. callGemini fast-fails immediately on 401 Unauthorized without retries'
   }
 });
 
+test('Gemini auth failure uses heuristic fallback and reports a sanitized extraction warning', async () => {
+  const originalFetch = global.fetch;
+  const originalGeminiKey = process.env.GEMINI_API_KEY;
+  const originalProvider = process.env.AI_PROVIDER;
+  const originalModel = process.env.GEMINI_MODEL;
+  let callCount = 0;
+  process.env.GEMINI_API_KEY = 'test-key';
+  process.env.AI_PROVIDER = 'gemini';
+  process.env.GEMINI_MODEL = 'gemini-2.5-flash';
+  global.fetch = async () => {
+    callCount += 1;
+    return {
+      ok: false,
+      status: 401,
+      text: async () => 'provider-secret-response'
+    };
+  };
+
+  try {
+    const result = await extractTaskFromWhatsAppMessage('Please update the project tracker', {
+      providedProjects: []
+    });
+    assert.equal(result.provider, 'heuristic');
+    assert.equal(result.extraction.isTask, true);
+    assert.match(result.fallbackReason, /Gemini extraction failed \(HTTP 401\)/);
+    assert.doesNotMatch(result.fallbackReason, /provider-secret-response/);
+    assert.equal(callCount, 1);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = originalGeminiKey;
+    if (originalProvider === undefined) delete process.env.AI_PROVIDER;
+    else process.env.AI_PROVIDER = originalProvider;
+    if (originalModel === undefined) delete process.env.GEMINI_MODEL;
+    else process.env.GEMINI_MODEL = originalModel;
+  }
+});
+
 test('17. testGeminiConnectivity validates API key availability and response', async () => {
   // Test when no API key provided
   const missingKeyRes = await testGeminiConnectivity({ apiKey: '' });
@@ -571,6 +610,5 @@ test('22. Reconnect safety: socket re-initialization replaces inactive socket wi
   socket1.trigger('messages.upsert', { type: 'notify' });
   assert.equal(intakeEventCount, 2, 'Stale socket listeners must be closed');
 });
-
 
 

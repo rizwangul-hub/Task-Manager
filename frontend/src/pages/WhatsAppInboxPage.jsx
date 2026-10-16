@@ -537,6 +537,9 @@ export const WhatsAppInboxPage = () => {
                     <span><strong>AI Analysis:</strong> {draft.aiExtraction.reason}</span>
                   </div>
                 )}
+                {draft.processingError && (
+                  <p className="text-danger" role="status">{draft.processingError}</p>
+                )}
 
                 {/* Original Message Snippet */}
                 <div
@@ -668,6 +671,10 @@ export const WhatsAppInboxPage = () => {
             </div>
 
             {/* Missing Info Warning */}
+            {selectedDraft.processingError && (
+              <p className="text-danger" role="status">{selectedDraft.processingError}</p>
+            )}
+
             {selectedDraft.aiExtraction?.missingInformation?.length > 0 && (
               <div
                 style={{
@@ -711,7 +718,7 @@ export const WhatsAppInboxPage = () => {
               >
                 <Bot size={16} color="#6366f1" style={{ flexShrink: 0 }} />
                 <div>
-                  <strong>Gemini AI Reasoning ({selectedDraft.aiExtraction?.modelUsed || 'gemini-2.5-flash'}):</strong>{' '}
+                  <strong>{selectedDraft.extractorProvider || 'AI'} Reasoning ({selectedDraft.aiExtraction?.modelUsed || 'default model'}):</strong>{' '}
                   {selectedDraft.aiExtraction.reason}
                 </div>
               </div>

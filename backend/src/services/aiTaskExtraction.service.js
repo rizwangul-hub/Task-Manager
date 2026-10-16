@@ -1,10 +1,11 @@
+import mongoose from 'mongoose';
 import { Project } from '../models/project.model.js';
 import { logger } from '../utils/logger.js';
 
 const GREETINGS_AND_CASUAL = [
-  /^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening|salam|assalam|aaoa)\b.*$/i,
-  /^(thanks|thank\s+you(\s+so\s+much|\s+a\s+lot)?|thx|ty|ok|okay|k|noted|seen|great|cool|awesome|done|perfect|yes|no|yup|nope|got\s+it)\b.*$/i,
-  /^(how\s+are\s+you(\s+doing)?|what'?s\s+up|how'?s\s+it\s+going)\b.*$/i
+  /^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening|salam|assalam|aaoa)(\s+(all|everyone|guys|team|there))?[!.,\s]*$/i,
+  /^(thanks|thank\s+you(\s+so\s+much|\s+a\s+lot)?|thx|ty|ok|okay|k|noted|seen|great|cool|awesome|done|perfect|yes|no|yup|nope|got\s+it)[!.,\s]*$/i,
+  /^(how\s+are\s+you(\s+doing)?|what'?s\s+up|how'?s\s+it\s+going)[!.,?\s]*$/i
 ];
 
 const ACTION_VERBS = [
@@ -380,24 +381,25 @@ Return ONLY a valid JSON object matching this schema:
           })
         });
 
-        // Fast fail on auth / bad request
+        // Fast fail on auth / bad request without retaining provider response bodies.
         if (response.status === 400 || response.status === 401 || response.status === 403) {
-          const errBody = await response.text();
-          throw new Error(`Gemini API Authentication or Client Error (${response.status}): ${errBody}`);
+          const error = new Error(`Gemini API Authentication or Client Error (${response.status}).`);
+          error.status = response.status;
+          throw error;
         }
 
         // Model not found -> try next model in fallback list
         if (response.status === 404) {
-          const errBody = await response.text();
-          logger.warn(`[GEMINI_API] Model "${modelToTry}" returned 404 (${errBody}). Attempting supported fallback...`);
-          lastError = new Error(`Gemini Model ${modelToTry} not available: ${errBody}`);
+          logger.warn(`[GEMINI_API] Model "${modelToTry}" returned HTTP 404. Attempting supported fallback...`);
+          lastError = new Error(`Gemini model "${modelToTry}" returned HTTP 404.`);
+          lastError.status = response.status;
           break; // Break inner retry loop to try next model in modelsToAttempt
         }
 
         // Rate limit (429) or Server error (500, 503) -> wait and retry with backoff
         if (response.status === 429 || response.status >= 500) {
-          const errBody = await response.text();
-          lastError = new Error(`Gemini API Transient Error (${response.status}): ${errBody}`);
+          lastError = new Error(`Gemini API transient error (${response.status}).`);
+          lastError.status = response.status;
           if (attempt < 2) {
             const delayMs = (attempt + 1) * 1000;
             await new Promise((res) => setTimeout(res, delayMs));
@@ -466,13 +468,12 @@ export async function testGeminiConnectivity({
     });
 
     if (!response.ok) {
-      const errBody = await response.text();
       return {
         success: false,
         configured: true,
         status: response.status,
         model,
-        error: `Gemini API returned HTTP ${response.status}: ${errBody}`
+        error: `Gemini API returned HTTP ${response.status}.`
       };
     }
 
@@ -490,7 +491,7 @@ export async function testGeminiConnectivity({
       success: false,
       configured: true,
       model,
-      error: `Network or connectivity error contacting Gemini: ${err.message}`
+      error: `Network or connectivity error contacting Gemini (${err?.name || 'Error'}).`
     };
   }
 }
@@ -562,11 +563,25 @@ export async function extractTaskFromWhatsAppMessage(
   } = {}
 ) {
   const text = String(rawText || '').trim();
-  const projects = providedProjects || (await Project.find({ isArchived: { $ne: true } }).select('_id title').lean());
+  let projects = providedProjects;
+  if (!projects) {
+    try {
+      if (mongoose.connection && mongoose.connection.readyState === 1) {
+        projects = await Project.find({ isArchived: { $ne: true } })
+          .select('_id title')
+          .lean()
+          .maxTimeMS(2500);
+      } else {
+        projects = [];
+      }
+    } catch {
+      projects = [];
+    }
+  }
   const context = {
     senderName,
     messageTimestamp: messageTimestamp instanceof Date ? messageTimestamp : new Date(messageTimestamp),
-    projects
+    projects: projects || []
   };
 
   const openAiKey = process.env.OPENAI_API_KEY;
@@ -575,6 +590,7 @@ export async function extractTaskFromWhatsAppMessage(
 
   let rawOutput = null;
   let providerUsed = 'heuristic';
+  let fallbackReason = null;
 
   // Prioritize Gemini if configured or requested
   if ((preferredProvider === 'gemini' || (!process.env.AI_PROVIDER && geminiKey)) && geminiKey) {
@@ -583,7 +599,9 @@ export async function extractTaskFromWhatsAppMessage(
       rawOutput = await callGemini(geminiKey, text, context);
       providerUsed = 'gemini';
     } catch (err) {
-      logger.warn(`[WA_EXTRACT] Gemini extraction failed, falling back to heuristic: ${err.message}`);
+      const status = err?.status ? ` (HTTP ${err.status})` : '';
+      fallbackReason = `Gemini extraction failed${status}; rule-based fallback was used.`;
+      logger.warn(`[WA_EXTRACT] ${fallbackReason}`);
     }
   } else if ((preferredProvider === 'openai' || (!preferredProvider && openAiKey)) && openAiKey) {
     try {
@@ -591,7 +609,9 @@ export async function extractTaskFromWhatsAppMessage(
       rawOutput = await callOpenAI(openAiKey, text, context);
       providerUsed = 'openai';
     } catch (err) {
-      logger.warn(`[WA_EXTRACT] OpenAI extraction failed, falling back to heuristic: ${err.message}`);
+      const status = err?.status ? ` (HTTP ${err.status})` : '';
+      fallbackReason = `OpenAI extraction failed${status}; rule-based fallback was used.`;
+      logger.warn(`[WA_EXTRACT] ${fallbackReason}`);
     }
   } else {
     logger.info('[WA_EXTRACT] GEMINI_API_KEY is not configured; using rule-based heuristic extractor.');
@@ -605,7 +625,8 @@ export async function extractTaskFromWhatsAppMessage(
   const validated = validateExtractionOutput(rawOutput, projects);
   return {
     extraction: validated,
-    provider: providerUsed
+    provider: providerUsed,
+    fallbackReason
   };
 }
 

@@ -221,9 +221,17 @@ export const whatsappDraftController = {
         messageTimestamp: new Date()
       });
 
+      const extraction = result?.extraction || result || {};
+      const provider = result?.provider || extraction.modelUsed || 'heuristic';
+
       res.status(200).json({
         status: 'success',
-        data: result
+        data: {
+          ...extraction,
+          provider,
+          extraction,
+          modelUsed: extraction.modelUsed || provider
+        }
       });
     } catch (error) {
       next(error);

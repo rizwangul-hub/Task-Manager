@@ -3,25 +3,41 @@ import { connectDB } from '../config/db.js';
 import { verifyAccessToken } from '../utils/token.js';
 import { User, normalizeUserRole } from '../models/user.model.js';
 import { AppError } from './errorHandler.js';
+import { logger } from '../utils/logger.js';
+
+export const getAuthenticatedTokenPayload = (req) => {
+  const authorization = req.headers.authorization || req.headers.Authorization || '';
+  const bearerToken = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim();
+  const cookieToken = req.cookies?.access_token;
+
+  if (bearerToken) {
+    const bearerPayload = verifyAccessToken(bearerToken);
+    if (bearerPayload) return bearerPayload;
+  }
+
+  return cookieToken ? verifyAccessToken(cookieToken) : null;
+};
 
 /**
  * Middleware ensuring incoming requests are authenticated via JWT (cookie or Bearer header)
  */
 export const authenticate = async (req, res, next) => {
-  // 1. Extract token from HTTP-only cookie or Authorization header
-  let token = req.cookies?.access_token;
-
-  if (!token && req.headers.authorization?.startsWith('Bearer ')) {
-    token = req.headers.authorization.split(' ')[1];
-  }
-
-  if (!token) {
+  // Prefer a valid bearer token, then fall back to the cookie for browser sessions.
+  const hasCredential = Boolean(req.cookies?.access_token || req.headers.authorization || req.headers.Authorization);
+  if (!hasCredential) {
+    logger.warn('[AUTH] Protected request rejected: no access credential.', {
+      method: req.method,
+      path: req.path
+    });
     return next(new AppError('Authentication required. Please log in to proceed.', 401));
   }
 
-  // 2. Verify token
-  const decoded = verifyAccessToken(token);
+  const decoded = getAuthenticatedTokenPayload(req);
   if (!decoded) {
+    logger.warn('[AUTH] Protected request rejected: access credentials are invalid or expired.', {
+      method: req.method,
+      path: req.path
+    });
     return next(new AppError('Session expired or invalid token. Please log in again.', 401));
   }
 

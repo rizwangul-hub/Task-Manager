@@ -58,6 +58,8 @@ const SERVERLESS_RUNTIME_ERROR =
 const QR_TTL_MS = 60_000;
 const MAX_RECONNECT_ATTEMPTS = 8;
 const cryptoConsoleFilterKey = Symbol.for('task-manager.whatsapp-crypto-console-filter');
+const isWhatsAppOwnerProcess = () =>
+  !process.env.NODE_APP_INSTANCE || process.env.NODE_APP_INSTANCE === '0';
 
 const installCryptoConsoleErrorFilter = (serviceLogger) => {
   let filterState = globalThis[cryptoConsoleFilterKey];
@@ -240,7 +242,10 @@ export const createWhatsAppService = ({
   const enqueueInboundWork = (work) => {
     const queuedWork = inboundQueue.then(work, work);
     inboundQueue = queuedWork.catch((error) => {
-      serviceLogger.error(`[WA_INBOUND_ERROR] ${redactError(error)}`);
+      serviceLogger.error('[WA_INBOUND_ERROR] Queued WhatsApp processing failed.', {
+        name: error?.name || 'Error',
+        code: error?.code || null
+      });
     });
     return queuedWork;
   };
@@ -290,54 +295,39 @@ export const createWhatsAppService = ({
       return;
     }
 
-    serviceLogger.info(
-      `[WA_INBOUND_MSG] Inbound group message detected: id=${messageId}, group=${remoteJid}, sender=${senderName || senderJid}, fromMe=${fromMe}`
-    );
+    serviceLogger.info('[WA_INBOUND] Eligible group message received.', { fromMe });
 
     if (fromMe) {
       if (process.env.WHATSAPP_IGNORE_FROM_ME === 'true') {
-        serviceLogger.info(
-          `[WA_INBOUND_FILTER] Message ${messageId} ignored: Sent by own account (fromMe=true) and WHATSAPP_IGNORE_FROM_ME is true.`
-        );
+        serviceLogger.info('[WA_INBOUND_FILTER] Ignored message sent by the connected account.');
         return;
       }
-      serviceLogger.info(
-        `[WA_INBOUND_MSG] Message ${messageId} sent by connected manager account (fromMe=true) in group ${remoteJid}. Processing instructions.`
-      );
     }
 
     const messageTimestamp = getWhatsAppMessageTimestamp(msg);
     if (!messageTimestamp) {
-      serviceLogger.warn(`[WA_INBOUND_FILTER] Message ${messageId} in ${remoteJid} ignored: No valid provider timestamp.`);
+      serviceLogger.warn('[WA_INBOUND_FILTER] Ignored group message without a valid provider timestamp.');
       return;
     }
     const checkpoint = await getInboundCheckpoint();
     if (!isAfterWhatsAppProcessingCheckpoint(messageTimestamp, checkpoint)) {
-      serviceLogger.info(
-        `[WA_INBOUND_FILTER] Message ${messageId} in ${remoteJid} ignored: Timestamp (${messageTimestamp.toISOString()}) predates processing checkpoint (${checkpoint ? new Date(checkpoint).toISOString() : 'none'}).`
-      );
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored group message at or before the saved processing checkpoint.');
       return;
     }
 
     const messageText = extractFullMessageText(msg);
     if (!messageText) {
-      serviceLogger.warn(
-        `[WA_INBOUND_FILTER] Message ${messageId} in ${remoteJid} ignored: Empty or undecryptable text payload (Bad MAC or non-text message).`
-      );
+      serviceLogger.warn('[WA_INBOUND_FILTER] Message had no extractable text; it may be media-only or undecryptable.');
       return;
     }
 
     const monitored = await findMonitoredGroup(remoteJid);
     if (!monitored) {
-      serviceLogger.info(
-        `[WA_INBOUND_FILTER] Message ${messageId} ignored: Group ${remoteJid} is not configured for monitoring in MongoDB. Enable it in Manager Dashboard or Settings to process tasks.`
-      );
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message from a group that is not monitored.');
       return;
     }
     if (monitored.isPaused) {
-      serviceLogger.info(
-        `[WA_INBOUND_FILTER] Message ${messageId} ignored: Group "${monitored.groupName || remoteJid}" is currently paused.`
-      );
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message from a paused group.');
       return;
     }
 
@@ -359,7 +349,7 @@ export const createWhatsAppService = ({
       existing = await TaskDraft.findOne({ groupJid: remoteJid, messageId });
     }
     if (existing) {
-      serviceLogger.info(`[WA_INBOUND_DUP] Message ${messageId} in "${monitored.groupName || remoteJid}" already drafted (status: ${existing.status}); skipping duplicate.`);
+      serviceLogger.info('[WA_INBOUND_DUP] Message already has a draft; skipped duplicate.');
       return;
     }
 
@@ -386,30 +376,29 @@ export const createWhatsAppService = ({
       }
     } catch (createErr) {
       if (createErr.code === 11000) {
-        serviceLogger.info(`[WA_INBOUND_DUP_INDEX] Concurrent duplicate prevented for message ${messageId}.`);
+        serviceLogger.info('[WA_INBOUND_DUP_INDEX] Unique message index prevented a concurrent duplicate draft.');
         return;
       }
       throw createErr;
     }
 
-    serviceLogger.info(`[WA_DRAFT_INIT] Draft record created for message ${messageId} from "${senderName || senderJid}" in "${monitored.groupName || remoteJid}"`);
+    serviceLogger.info('[WA_DRAFT_INIT] Draft record created.', { draftId: String(draft._id || '') });
 
     const extractionTask = (async () => {
       try {
-        serviceLogger.info(
-          `[WA_EXTRACT_START] Analyzing text (${messageText.length} chars) from "${senderName || senderJid}" in "${monitored.groupName || remoteJid}": "${messageText.slice(0, 60)}..."`
-        );
+        serviceLogger.info('[WA_EXTRACT_START] Starting task extraction.', { characterCount: messageText.length });
 
         let extraction;
         let provider;
+        let fallbackReason;
         if (inboundDependencies.extractTask) {
-          ({ extraction, provider } = await inboundDependencies.extractTask(messageText, {
+          ({ extraction, provider, fallbackReason } = await inboundDependencies.extractTask(messageText, {
             senderName,
             messageTimestamp
           }));
         } else {
           const { extractTaskFromWhatsAppMessage } = await import('./aiTaskExtraction.service.js');
-          ({ extraction, provider } = await extractTaskFromWhatsAppMessage(messageText, {
+          ({ extraction, provider, fallbackReason } = await extractTaskFromWhatsAppMessage(messageText, {
             senderName,
             messageTimestamp
           }));
@@ -425,14 +414,17 @@ export const createWhatsAppService = ({
         draft.aiExtraction = extraction;
         draft.status = newStatus;
         draft.extractorProvider = provider;
+        draft.processingError = fallbackReason || null;
         await draft.save();
 
-        serviceLogger.info(
-          `[WA_EXTRACT_RESULT] Extraction complete for message ${messageId}: isTask=${extraction.isTask}, title="${extraction.title}", priority=${extraction.priority}, confidence=${extraction.confidence}, provider=${provider}, status=${newStatus}`
-        );
-        serviceLogger.info(
-          `[WA_DRAFT_PERSISTED] Task draft ${draft._id} persisted in MongoDB with status "${newStatus}". Awaiting manager review.`
-        );
+        serviceLogger.info('[WA_EXTRACT_RESULT] Extraction completed.', {
+          isTask: Boolean(extraction.isTask),
+          confidence: extraction.confidence,
+          provider,
+          status: newStatus,
+          fallbackUsed: Boolean(fallbackReason)
+        });
+        serviceLogger.info('[WA_DRAFT_PERSISTED] Task draft saved for review.', { draftId: String(draft._id || '') });
 
         if (inboundDependencies.broadcastDraft) {
           await inboundDependencies.broadcastDraft('whatsapp:draft_created', draft);
@@ -440,15 +432,20 @@ export const createWhatsAppService = ({
           const { socketService } = await import('./socket.service.js');
           socketService.broadcast('whatsapp:draft_created', draft);
         }
-        serviceLogger.info(`[WA_BROADCAST] Broadcasted "whatsapp:draft_created" for draft ${draft._id} to real-time clients.`);
+        serviceLogger.info('[WA_BROADCAST] Task draft update broadcast to real-time clients.');
       } catch (aiErr) {
-        serviceLogger.error(`[WA_INBOUND_AI_ERROR] Extraction failed for ${messageId}: ${redactError(aiErr)}`);
+        serviceLogger.error('[WA_EXTRACTION_ERROR] Task extraction failed.', {
+          name: aiErr?.name || 'Error',
+          status: aiErr?.status || null
+        });
         draft.status = 'failed';
-        draft.processingError = aiErr.message || 'AI task extraction failed';
+        draft.processingError = 'Task extraction failed. Review server diagnostics and retry extraction.';
         try {
           await draft.save();
         } catch (saveError) {
-          serviceLogger.error(`[WA_INBOUND_AI_ERROR] Could not persist failed extraction for ${messageId}: ${redactError(saveError)}`);
+          serviceLogger.error('[WA_EXTRACTION_ERROR] Could not persist failed extraction status.', {
+            name: saveError?.name || 'Error'
+          });
         }
         try {
           if (inboundDependencies.broadcastDraft) {
@@ -458,7 +455,9 @@ export const createWhatsAppService = ({
             socketService.broadcast('whatsapp:draft_created', draft);
           }
         } catch (broadcastError) {
-          serviceLogger.error(`[WA_INBOUND_AI_ERROR] Could not broadcast draft ${messageId}: ${redactError(broadcastError)}`);
+          serviceLogger.error('[WA_EXTRACTION_ERROR] Could not broadcast failed draft status.', {
+            name: broadcastError?.name || 'Error'
+          });
         }
       }
     })();
@@ -672,6 +671,12 @@ export const createWhatsAppService = ({
     if (stopped) return null;
     if (connectionState === CONNECTION_STATES.LOGGED_OUT) return null;
     if (authStateLoadFailed) return null;
+    if (!isWhatsAppOwnerProcess()) {
+      connectionState = CONNECTION_STATES.DISCONNECTED;
+      lastError = 'This backend worker does not own the WhatsApp connection. Run a single WhatsApp owner process.';
+      notifyWaiters();
+      return null;
+    }
     if (isUnsupportedServerlessRuntime()) {
       connectionState = CONNECTION_STATES.DISCONNECTED;
       lastError = SERVERLESS_RUNTIME_ERROR;
@@ -737,19 +742,22 @@ export const createWhatsAppService = ({
         });
 
         newSock.ev.on('messages.upsert', ({ messages, type }) => {
-          if (!Array.isArray(messages)) return;
+          if (type !== 'notify' || !Array.isArray(messages)) return;
           for (const message of messages) {
             if (message.key?.id && message.message) {
               cacheRecentWhatsAppMessage(message.key.id, message.message);
             }
           }
-          serviceLogger.info(`[WA_INBOUND_RAW] Upsert event received: type=${type}, messageCount=${messages.length}`);
+          serviceLogger.info('[WA_INBOUND] New-message event received.', { messageCount: messages.length });
           void enqueueInboundWork(async () => {
             for (const message of messages) {
               try {
                 await processInboundMessage(message);
               } catch (error) {
-                serviceLogger.error(`[WA_INBOUND_ERROR] Failed to process message in Baileys: ${redactError(error)}`);
+                serviceLogger.error('[WA_INBOUND_ERROR] Failed to process a WhatsApp message.', {
+                  name: error?.name || 'Error',
+                  code: error?.code || null
+                });
               }
             }
           });
@@ -802,9 +810,7 @@ export const createWhatsAppService = ({
             pairingBackupConfirmed = false;
             if (authenticationValid) reconnectAttempt = 0;
             if (authenticationValid) {
-              serviceLogger.info(
-                `[WA_STATE] WhatsApp connection state: CONNECTED (Authenticated as "${newSock.user?.name || 'Manager'}", JID: ${newSock.user?.id || 'none'}, LID: ${newSock.user?.lid || 'none'})`
-              );
+              serviceLogger.info('[WA_STATE] WhatsApp connection state: CONNECTED (authenticated).');
             } else {
               serviceLogger.warn(`[WA] ${lastError}`);
             }
@@ -1024,16 +1030,23 @@ export const createWhatsAppService = ({
   const getDiagnostics = () => ({
     provider: 'Baileys (WhatsApp Web Multi-Device)',
     connectionStatus: connectionState,
+    instanceRole: isWhatsAppOwnerProcess() ? 'owner' : 'non_owner',
     qrRequired: connectionState === CONNECTION_STATES.QR_REQUIRED,
     rePairConfirmationRequired,
     qrCodeDataUrl: connectionState === CONNECTION_STATES.QR_REQUIRED ? getPairingQr() : null,
     qrExpiresAt: connectionState === CONNECTION_STATES.QR_REQUIRED ? pairingQrExpiresAt : null,
     authenticationValid,
     sendingCapabilityStatus: isReady() ? 'ready' : 'unavailable',
-    hostingCompatibility: isUnsupportedServerlessRuntime() ? 'serverless_unsupported' : 'persistent_runtime',
+    hostingCompatibility: isUnsupportedServerlessRuntime()
+      ? 'serverless_unsupported'
+      : !isWhatsAppOwnerProcess()
+        ? 'non_owner_worker'
+        : 'persistent_runtime',
     hostingCompatibilityMessage: isUnsupportedServerlessRuntime()
       ? `${SERVERLESS_RUNTIME_ERROR} Deploy the backend API to an always-on Node.js host.`
-      : null,
+      : !isWhatsAppOwnerProcess()
+        ? 'This worker does not own the Baileys socket. Run the API and WhatsApp listener as a single backend process.'
+        : null,
     lastConnectionAt,
     lastDisconnectionReason,
     lastSuccessfulSendAt,
@@ -1041,7 +1054,9 @@ export const createWhatsAppService = ({
       ? redactError(lastError)
       : isUnsupportedServerlessRuntime()
         ? 'Baileys is not initialized in the Vercel serverless runtime.'
-        : null
+        : !isWhatsAppOwnerProcess()
+          ? 'Baileys is not initialized on this non-owner backend worker.'
+          : null
   });
 
   const getParticipatingGroups = async () => {
@@ -1060,8 +1075,11 @@ export const createWhatsAppService = ({
       }));
       return { success: true, groups };
     } catch (err) {
-      serviceLogger.error(`[WA_GROUPS_ERROR] Failed to fetch participating groups: ${err.message}`);
-      return { success: false, error: err.message, groups: [] };
+      serviceLogger.error('[WA_GROUPS_ERROR] Failed to fetch participating groups.', {
+        name: err?.name || 'Error',
+        statusCode: err?.output?.statusCode || null
+      });
+      return { success: false, error: 'Unable to fetch WhatsApp groups from the current connection.', groups: [] };
     }
   };
 
