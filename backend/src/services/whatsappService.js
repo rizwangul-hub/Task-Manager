@@ -138,8 +138,13 @@ const createBaileysLogger = (serviceLogger) => {
         return;
       }
 
-      if (now - lastOtherWarningAt >= 60_000) {
-        serviceLogger.warn('[WA_BAILEYS] Baileys reported an internal error; details omitted.');
+      if (now - lastOtherWarningAt >= 10_000) {
+        const safeDetail = redactError(message || entry.msg || 'Baileys internal error');
+        const safeStack = entry.err?.stack ? redactError(entry.err.stack.split('\n').slice(0, 3).join(' | ')) : null;
+        serviceLogger.warn(`[WA_BAILEYS] Baileys internal event: ${safeDetail}`, {
+          errName: entry.err?.name || null,
+          stack: safeStack
+        });
         lastOtherWarningAt = now;
       }
     }
@@ -319,50 +324,86 @@ export const createWhatsAppService = ({
     const senderName = msg.pushName || '';
 
     if (!isGroup || remoteJid === 'status@broadcast') {
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored non-group message or status broadcast.', {
+        remoteJid,
+        isGroup
+      });
       return;
     }
 
-    serviceLogger.info('[WA_INBOUND] Eligible group message received.', { fromMe });
+    serviceLogger.info('[WA_MESSAGE_RECEIVED] Inbound group message accepted for processing.', {
+      messageId,
+      remoteJid,
+      fromMe
+    });
 
     if (fromMe) {
       if (process.env.WHATSAPP_ALLOW_FROM_ME !== 'true') {
-        serviceLogger.info('[WA_INBOUND_FILTER] Ignored message sent by the connected account.');
+        serviceLogger.info('[WA_INBOUND_FILTER] Ignored message sent by the connected account (fromMe=true). Set WHATSAPP_ALLOW_FROM_ME=true in backend/.env to enable self-testing.', {
+          remoteJid,
+          messageId
+        });
         return;
       }
+      serviceLogger.info('[WA_INBOUND_FILTER] Processing self-sent message because WHATSAPP_ALLOW_FROM_ME=true.', {
+        messageId
+      });
     }
 
     const messageTimestamp = getWhatsAppMessageTimestamp(msg);
     if (!messageTimestamp) {
-      serviceLogger.warn('[WA_INBOUND_FILTER] Ignored group message without a valid provider timestamp.');
+      serviceLogger.warn('[WA_INBOUND_FILTER] Ignored group message without a valid provider timestamp.', {
+        messageId,
+        rawTimestamp: msg?.messageTimestamp
+      });
       return;
     }
     const checkpoint = await getInboundCheckpoint();
     if (!isAfterWhatsAppProcessingCheckpoint(messageTimestamp, checkpoint)) {
-      serviceLogger.info('[WA_INBOUND_FILTER] Ignored group message at or before the saved processing checkpoint.');
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored group message at or before the saved processing checkpoint.', {
+        messageId,
+        messageTimestamp: messageTimestamp.toISOString(),
+        checkpoint: checkpoint ? new Date(checkpoint).toISOString() : null
+      });
       return;
     }
-
 
     const messageText = extractFullMessageText(msg);
     if (!messageText) {
       counters.totalDecryptionFailures += 1;
-      serviceLogger.warn('[WA_INBOUND_FILTER] Message had no extractable text; it may be media-only or undecryptable.');
+      serviceLogger.warn('[WA_INBOUND_FILTER] Message had no extractable text (undecryptable, media-only, or stub).', {
+        messageId,
+        remoteJid,
+        messageStubType: msg?.messageStubType || null,
+        messageKeys: msg?.message ? Object.keys(msg.message) : []
+      });
       return;
     }
 
     const monitored = await findMonitoredGroup(remoteJid);
-    serviceLogger.info('[WA_INBOUND][GROUP_FILTER_RESULT] Group check completed.', {
-      groupJid: remoteJid?.slice(-32),
-      monitored: Boolean(monitored?.isMonitored),
-      paused: Boolean(monitored?.isPaused)
-    });
-
     if (!monitored) {
-      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message from a group that is not monitored.');
+      let activeMonitoredInfo = [];
+      try {
+        const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+        const docs = await MonitoredGroup.find().lean();
+        activeMonitoredInfo = docs.map((d) => ({
+          groupJid: d.groupJid,
+          groupName: d.groupName,
+          isMonitored: d.isMonitored,
+          isPaused: d.isPaused
+        }));
+      } catch {}
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message: Group is not in monitored list.', {
+        incomingGroupJid: remoteJid,
+        allMonitoredGroups: activeMonitoredInfo
+      });
       return;
     }
     if (monitored.isPaused) {
-      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message from a paused group.');
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message: Monitored group is currently paused.', {
+        groupJid: remoteJid,
+        groupName: monitored.groupName
+      });
       return;
     }
 
@@ -418,7 +459,11 @@ export const createWhatsAppService = ({
     }
 
     counters.totalDraftsCreated += 1;
-    serviceLogger.info('[WA_DRAFT_INIT] Draft record created.', { draftId: String(draft._id || '') });
+    serviceLogger.info('[WA_DRAFT_INIT] Draft record created in MongoDB.', {
+      draftId: String(draft._id || ''),
+      messageId: draft.messageId,
+      status: draft.status
+    });
 
     const extractionTask = (async () => {
       try {
@@ -452,6 +497,15 @@ export const createWhatsAppService = ({
         draft.extractorProvider = provider;
         draft.processingError = fallbackReason || null;
         await draft.save();
+
+        serviceLogger.info('[WA_DRAFT_SAVED] Task draft persisted to MongoDB successfully.', {
+          draftId: String(draft._id || ''),
+          messageId: draft.messageId,
+          status: draft.status,
+          provider,
+          isTask: Boolean(extraction.isTask),
+          title: extraction.title || '(none)'
+        });
 
         serviceLogger.info('[WA_EXTRACT_RESULT] Extraction completed.', {
           isTask: Boolean(extraction.isTask),
@@ -805,8 +859,32 @@ export const createWhatsAppService = ({
           });
         });
 
-        newSock.ev.on('messages.upsert', ({ messages, type }) => {
-          if (type !== 'notify' || !Array.isArray(messages)) return;
+        newSock.ev.on('messages.upsert', (upsertData) => {
+          const type = upsertData?.type;
+          const messages = upsertData?.messages;
+          const msgList = Array.isArray(messages) ? messages : [];
+
+          // Temporary safe diagnostic log at the VERY beginning of messages.upsert
+          serviceLogger.info('[WA_DIAGNOSTIC][MESSAGES_UPSERT_START]', {
+            eventType: type,
+            messageCount: msgList.length,
+            messagesSummary: msgList.map((m) => ({
+              id: m.key?.id || 'unknown',
+              remoteJid: m.key?.remoteJid || 'unknown',
+              fromMe: Boolean(m.key?.fromMe),
+              hasMessage: Boolean(m.message),
+              hasText: Boolean(extractFullMessageText(m))
+            }))
+          });
+
+          if (type !== 'notify' || !Array.isArray(messages)) {
+            serviceLogger.info('[WA_INBOUND_FILTER] Ignored upsert event with non-notify type.', {
+              type,
+              count: msgList.length
+            });
+            return;
+          }
+
           const messageIds = [];
           for (const message of messages) {
             if (message.key?.id && message.message) {
@@ -826,7 +904,8 @@ export const createWhatsAppService = ({
               } catch (error) {
                 serviceLogger.error('[WA_INBOUND_ERROR] Failed to process a WhatsApp message.', {
                   name: error?.name || 'Error',
-                  code: error?.code || null
+                  code: error?.code || null,
+                  message: redactError(error?.message || '')
                 });
               }
             }

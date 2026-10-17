@@ -368,6 +368,11 @@ Return ONLY a valid JSON object matching this schema:
     // Bounded retry loop for transient network/rate-limit issues
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
+        logger.info(`[WA_GEMINI_CALL] Calling Gemini REST API.`, {
+          model: modelToTry,
+          attempt: attempt + 1
+        });
+
         const response = await fetch(url, {
           method: 'POST',
           headers: {
@@ -383,8 +388,14 @@ Return ONLY a valid JSON object matching this schema:
           })
         });
 
+        logger.info(`[WA_GEMINI_RESPONSE] Gemini HTTP status received: ${response.status}`, {
+          model: modelToTry,
+          status: response.status
+        });
+
         // Fast fail on auth / bad request without retaining provider response bodies.
         if (response.status === 400 || response.status === 401 || response.status === 403) {
+          logger.warn(`[WA_GEMINI_ERROR] Gemini request rejected HTTP ${response.status}`, { model: modelToTry, status: response.status });
           const error = new Error(`Gemini API Authentication or Client Error (${response.status}).`);
           error.status = response.status;
           throw error;
@@ -400,6 +411,7 @@ Return ONLY a valid JSON object matching this schema:
 
         // Rate limit (429) or Server error (500, 503) -> wait and retry with backoff
         if (response.status === 429 || response.status >= 500) {
+          logger.warn(`[WA_GEMINI_ERROR] Gemini transient error HTTP ${response.status}`, { model: modelToTry, status: response.status });
           lastError = new Error(`Gemini API transient error (${response.status}).`);
           lastError.status = response.status;
           if (attempt < 2) {
@@ -418,6 +430,12 @@ Return ONLY a valid JSON object matching this schema:
 
         const parsed = JSON.parse(rawText);
         parsed.modelUsed = modelToTry;
+        logger.info(`[WA_GEMINI_SUCCESS] Gemini successfully parsed task output.`, {
+          modelUsed: modelToTry,
+          isTask: parsed.isTask,
+          title: parsed.title || '(no title)',
+          confidence: parsed.confidence
+        });
         return parsed;
       } catch (err) {
         lastError = err;
