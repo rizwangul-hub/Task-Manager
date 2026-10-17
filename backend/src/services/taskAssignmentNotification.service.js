@@ -142,15 +142,23 @@ export const createTaskAssignmentNotificationService = ({
     },
 
     processPending: async () => {
-      const staleProcessingAt = new Date(Date.now() - 5 * 60 * 1000);
-      const pending = await notificationModel.find({
-        $or: [
-          { status: TASK_WHATSAPP_STATUSES.PENDING, nextAttemptAt: { $lte: new Date() } },
-          { status: TASK_WHATSAPP_STATUSES.PROCESSING, processingStartedAt: { $lt: staleProcessingAt } }
-        ]
-      }).select('_id').limit(25);
-      await Promise.all(pending.map(({ _id }) => deliver(_id)));
-      return pending.length;
+      if (notificationModel === TaskWhatsAppNotification && mongoose.connection?.readyState !== 1) {
+        return 0;
+      }
+      try {
+        const staleProcessingAt = new Date(Date.now() - 5 * 60 * 1000);
+        const pending = await notificationModel.find({
+          $or: [
+            { status: TASK_WHATSAPP_STATUSES.PENDING, nextAttemptAt: { $lte: new Date() } },
+            { status: TASK_WHATSAPP_STATUSES.PROCESSING, processingStartedAt: { $lt: staleProcessingAt } }
+          ]
+        }).select('_id').limit(25);
+        await Promise.all(pending.map(({ _id }) => deliver(_id)));
+        return pending.length;
+      } catch (err) {
+        logger.error('[WA_OUTBOX] Error processing pending notifications:', err.message);
+        return 0;
+      }
     },
 
     retry: async (taskId, notificationId) => {

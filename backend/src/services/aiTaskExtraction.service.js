@@ -322,9 +322,11 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
  * Call Gemini API with official REST structure, x-goog-api-key, and dynamic model fallback
  */
 export async function callGemini(apiKey, text, context, options = {}) {
-  const primaryModel = options.model || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const primaryModel = options.model || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
   const explicitApiUrl = options.apiUrl;
-  const modelsToAttempt = explicitApiUrl ? [primaryModel] : [primaryModel, 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  const modelsToAttempt = explicitApiUrl
+    ? [primaryModel]
+    : [...new Set([primaryModel, 'gemini-1.5-flash', 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest'])].filter(Boolean);
 
   const prompt = `You are an AI assistant in a task management system.
 Analyze the following WhatsApp message received in a team group.
@@ -438,62 +440,96 @@ Return ONLY a valid JSON object matching this schema:
  */
 export async function testGeminiConnectivity({
   apiKey = process.env.GEMINI_API_KEY,
-  model = process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-  apiUrl = process.env.GEMINI_API_URL
+  model = process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+  apiUrl = null
 } = {}) {
-  if (!apiKey) {
+  const trimmedKey = String(apiKey || '').trim();
+  if (!trimmedKey) {
     return {
       success: false,
       configured: false,
-      error: 'GEMINI_API_KEY is not configured in environment variables.'
+      error: 'GEMINI_API_KEY is not configured in environment variables. Please add your GEMINI_API_KEY to backend/.env.'
     };
   }
 
-  const effectiveUrl = apiUrl || `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const candidateModels = apiUrl
+    ? [model]
+    : [...new Set([model, 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-1.5-flash'])].filter(Boolean);
 
-  try {
-    const response = await fetch(effectiveUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: 'Respond with valid JSON: {"ping": "pong", "status": "ok"}' }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.1
+  let lastStatus = 500;
+  let lastErrorDetail = '';
+
+  for (const modelToTry of candidateModels) {
+    const effectiveUrl = apiUrl || `https://generativelanguage.googleapis.com/v1beta/models/${modelToTry}:generateContent`;
+
+    try {
+      const response = await fetch(effectiveUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': trimmedKey
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Respond with valid JSON: {"ping": "pong", "status": "ok"}' }] }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.1
+          }
+        })
+      });
+
+      lastStatus = response.status;
+
+      if (!response.ok) {
+        let detail = '';
+        try {
+          const errData = await response.json();
+          detail = errData?.error?.message ? `: ${errData.error.message}` : '';
+        } catch {
+          detail = '';
         }
-      })
-    });
+        lastErrorDetail = detail;
 
-    if (!response.ok) {
+        // If 404 or 503 and more models to try, try next candidate
+        if ((response.status === 404 || response.status === 503) && candidateModels.indexOf(modelToTry) < candidateModels.length - 1) {
+          continue;
+        }
+
+        return {
+          success: false,
+          configured: true,
+          status: response.status,
+          model: modelToTry,
+          error: `Gemini API returned HTTP ${response.status}${detail}`
+        };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        configured: true,
+        model: modelToTry,
+        message: 'Google Gemini API connection test succeeded.',
+        projectNumber: process.env.GOOGLE_CLOUD_PROJECT_NUMBER || '1061431060123',
+        sampleResult: data.candidates?.[0]?.content?.parts?.[0]?.text || null
+      };
+    } catch (err) {
       return {
         success: false,
         configured: true,
-        status: response.status,
-        model,
-        error: `Gemini API returned HTTP ${response.status}.`
+        model: modelToTry,
+        error: `Network or connectivity error contacting Gemini (${err?.message || err?.name || 'Error'}).`
       };
     }
-
-    const data = await response.json();
-    return {
-      success: true,
-      configured: true,
-      model,
-      message: 'Google Gemini API connection test succeeded.',
-      projectNumber: process.env.GOOGLE_CLOUD_PROJECT_NUMBER || '1061431060123',
-      sampleResult: data.candidates?.[0]?.content?.parts?.[0]?.text || null
-    };
-  } catch (err) {
-    return {
-      success: false,
-      configured: true,
-      model,
-      error: `Network or connectivity error contacting Gemini (${err?.name || 'Error'}).`
-    };
   }
+
+  return {
+    success: false,
+    configured: true,
+    status: lastStatus,
+    model,
+    error: `Gemini API returned HTTP ${lastStatus}${lastErrorDetail}`
+  };
 }
 
 /**

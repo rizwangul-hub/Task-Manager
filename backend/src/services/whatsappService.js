@@ -3,10 +3,12 @@ import makeWASocket, {
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   Browsers,
-  WAMessageStatus
+  WAMessageStatus,
+  isJidBroadcast,
+  isJidNewsletter
 } from '@whiskeysockets/baileys';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, rename, stat } from 'node:fs/promises';
+import { mkdir, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import pino from 'pino';
 import QRCode from 'qrcode';
@@ -205,6 +207,14 @@ export const createWhatsAppService = ({
   }
 } = {}) => {
   let instanceSock = null;
+  // Operational counters for diagnostics (non-sensitive)
+  let counters = {
+    totalMessagesReceived: 0,
+    totalDraftsCreated: 0,
+    totalExtractionFailures: 0,
+    totalDecryptionFailures: 0,
+    disconnectCount: 0
+  };
   let connectionState = CONNECTION_STATES.DISCONNECTED;
   let initializationPromise = null;
   let reconnectPromise = null;
@@ -225,6 +235,22 @@ export const createWhatsAppService = ({
   const connectionWaiters = new Set();
   let inboundQueue = Promise.resolve();
   const pendingExtractions = new Set();
+  const msgRetryCounterMap = new Map();
+  const msgRetryCounterCache = {
+    get: (key) => msgRetryCounterMap.get(key),
+    set: (key, val) => {
+      if (msgRetryCounterMap.size > 2000) {
+        const first = msgRetryCounterMap.keys().next().value;
+        msgRetryCounterMap.delete(first);
+      }
+      msgRetryCounterMap.set(key, val);
+    },
+    del: (key) => msgRetryCounterMap.delete(key),
+    flushAll: () => msgRetryCounterMap.clear()
+  };
+  let cachedGroups = null;
+  let cachedGroupsAt = 0;
+  let inFlightGroupsPromise = null;
 
   const isReady = () => {
     const s = instanceSock;
@@ -266,13 +292,14 @@ export const createWhatsAppService = ({
     await waitForInboundExtractions();
   };
 
+  const serviceStartedAt = new Date(Date.now() - 60_000);
   const getInboundCheckpoint = async () => {
     if (inboundDependencies.getCheckpoint) return inboundDependencies.getCheckpoint();
     const { WhatsAppProcessingCheckpoint } = await import(
       '../models/whatsappProcessingCheckpoint.model.js'
     );
     const checkpoint = await WhatsAppProcessingCheckpoint.findOne({ key: 'inbound' }).lean();
-    return checkpoint?.startedAt || null;
+    return checkpoint?.startedAt || serviceStartedAt;
   };
 
   const findMonitoredGroup = async (groupJid) => {
@@ -298,7 +325,7 @@ export const createWhatsAppService = ({
     serviceLogger.info('[WA_INBOUND] Eligible group message received.', { fromMe });
 
     if (fromMe) {
-      if (process.env.WHATSAPP_IGNORE_FROM_ME === 'true') {
+      if (process.env.WHATSAPP_ALLOW_FROM_ME !== 'true') {
         serviceLogger.info('[WA_INBOUND_FILTER] Ignored message sent by the connected account.');
         return;
       }
@@ -315,13 +342,21 @@ export const createWhatsAppService = ({
       return;
     }
 
+
     const messageText = extractFullMessageText(msg);
     if (!messageText) {
+      counters.totalDecryptionFailures += 1;
       serviceLogger.warn('[WA_INBOUND_FILTER] Message had no extractable text; it may be media-only or undecryptable.');
       return;
     }
 
     const monitored = await findMonitoredGroup(remoteJid);
+    serviceLogger.info('[WA_INBOUND][GROUP_FILTER_RESULT] Group check completed.', {
+      groupJid: remoteJid?.slice(-32),
+      monitored: Boolean(monitored?.isMonitored),
+      paused: Boolean(monitored?.isPaused)
+    });
+
     if (!monitored) {
       serviceLogger.info('[WA_INBOUND_FILTER] Ignored message from a group that is not monitored.');
       return;
@@ -382,6 +417,7 @@ export const createWhatsAppService = ({
       throw createErr;
     }
 
+    counters.totalDraftsCreated += 1;
     serviceLogger.info('[WA_DRAFT_INIT] Draft record created.', { draftId: String(draft._id || '') });
 
     const extractionTask = (async () => {
@@ -426,6 +462,19 @@ export const createWhatsAppService = ({
         });
         serviceLogger.info('[WA_DRAFT_PERSISTED] Task draft saved for review.', { draftId: String(draft._id || '') });
 
+        if (!inboundDependencies.getCheckpoint) {
+          try {
+            const { WhatsAppProcessingCheckpoint } = await import('../models/whatsappProcessingCheckpoint.model.js');
+            await WhatsAppProcessingCheckpoint.findOneAndUpdate(
+              { key: 'inbound' },
+              { $max: { startedAt: messageTimestamp } },
+              { upsert: true }
+            );
+          } catch {
+            // Non-critical checkpoint update error
+          }
+        }
+
         if (inboundDependencies.broadcastDraft) {
           await inboundDependencies.broadcastDraft('whatsapp:draft_created', draft);
         } else {
@@ -434,6 +483,7 @@ export const createWhatsAppService = ({
         }
         serviceLogger.info('[WA_BROADCAST] Task draft update broadcast to real-time clients.');
       } catch (aiErr) {
+        counters.totalExtractionFailures += 1;
         serviceLogger.error('[WA_EXTRACTION_ERROR] Task extraction failed.', {
           name: aiErr?.name || 'Error',
           status: aiErr?.status || null
@@ -715,12 +765,26 @@ export const createWhatsAppService = ({
           auth: authConfig,
           logger: createBaileysLogger(serviceLogger),
           printQRInTerminal: false,
-          markOnlineOnConnect: false,
+          markOnlineOnConnect: true,
           syncFullHistory: false,
           browser: Browsers.ubuntu('Chrome'),
+          msgRetryCounterCache,
+          shouldIgnoreJid: (jid) => !jid || isJidBroadcast(jid) || (isJidNewsletter ? isJidNewsletter(jid) : String(jid).endsWith('@newsletter')),
+          keepAliveIntervalMs: 25_000,
+          defaultQueryTimeoutMs: 90_000,
+          connectTimeoutMs: 60_000,
           getMessage: async (key) => {
             if (key?.id && recentMessageStore.has(key.id)) {
               return recentMessageStore.get(key.id);
+            }
+            try {
+              const { TaskDraft } = await import('../models/taskDraft.model.js');
+              const draft = await TaskDraft.findOne({ messageId: key?.id }).select('rawMessageText').lean();
+              if (draft?.rawMessageText) {
+                return { conversation: draft.rawMessageText };
+              }
+            } catch {
+              // Ignore lookup errors
             }
             return undefined;
           }
@@ -743,12 +807,18 @@ export const createWhatsAppService = ({
 
         newSock.ev.on('messages.upsert', ({ messages, type }) => {
           if (type !== 'notify' || !Array.isArray(messages)) return;
+          const messageIds = [];
           for (const message of messages) {
             if (message.key?.id && message.message) {
               cacheRecentWhatsAppMessage(message.key.id, message.message);
             }
+            if (message.key?.id) messageIds.push(message.key.id);
           }
-          serviceLogger.info('[WA_INBOUND] New-message event received.', { messageCount: messages.length });
+          counters.totalMessagesReceived += messages.length;
+          serviceLogger.info('[WA_INBOUND][MESSAGE_RECEIVED] New-message event received.', {
+            messageCount: messages.length,
+            messageIds: messageIds.slice(0, 20)
+          });
           void enqueueInboundWork(async () => {
             for (const message of messages) {
               try {
@@ -824,6 +894,7 @@ export const createWhatsAppService = ({
           }
 
           if (update.connection === 'close') {
+            counters.disconnectCount += 1;
             const statusCode = update.lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = statusCode === loggedOutCode;
             const reasonName = Object.entries(DisconnectReason)
@@ -852,6 +923,14 @@ export const createWhatsAppService = ({
                 '[WA_STATE] Connection was replaced by another active session or dev process. Backing off reconnection to avoid collision.'
               );
             }
+            // Provide a short, structured log for operators with actionable details
+            serviceLogger.info('[WA_DISCONNECT_DETAILS]', {
+              disconnectCount: counters.disconnectCount,
+              reason: reasonName || statusCode || 'Unknown',
+              statusCode: statusCode || null,
+              stopped: Boolean(stopped),
+              isLoggedOut
+            });
             notifyWaiters();
             if (!isLoggedOut && !stopped) scheduleReconnect();
           }
@@ -1056,31 +1135,55 @@ export const createWhatsAppService = ({
         ? 'Baileys is not initialized in the Vercel serverless runtime.'
         : !isWhatsAppOwnerProcess()
           ? 'Baileys is not initialized on this non-owner backend worker.'
-          : null
+          : null,
+    stats: {
+      totalMessagesReceived: counters.totalMessagesReceived,
+      totalDraftsCreated: counters.totalDraftsCreated,
+      totalExtractionFailures: counters.totalExtractionFailures,
+      totalDecryptionFailures: counters.totalDecryptionFailures,
+      disconnectCount: counters.disconnectCount
+    }
   });
 
   const getParticipatingGroups = async () => {
     if (!isReady()) {
       return { success: false, reason: 'WhatsApp socket is not connected', groups: [] };
     }
-    try {
-      const groupData = await instanceSock.groupFetchAllParticipating();
-      const groups = Object.values(groupData || {}).map((g) => ({
-        id: g.id,
-        subject: g.subject || 'Unnamed Group',
-        creation: g.creation ? new Date(g.creation * 1000) : null,
-        owner: g.owner || null,
-        size: Array.isArray(g.participants) ? g.participants.length : 0,
-        desc: g.desc || ''
-      }));
-      return { success: true, groups };
-    } catch (err) {
-      serviceLogger.error('[WA_GROUPS_ERROR] Failed to fetch participating groups.', {
-        name: err?.name || 'Error',
-        statusCode: err?.output?.statusCode || null
-      });
-      return { success: false, error: 'Unable to fetch WhatsApp groups from the current connection.', groups: [] };
+    const now = Date.now();
+    if (cachedGroups && (now - cachedGroupsAt < 20_000)) {
+      return { success: true, groups: cachedGroups };
     }
+    if (inFlightGroupsPromise) {
+      return inFlightGroupsPromise;
+    }
+    inFlightGroupsPromise = (async () => {
+      try {
+        const groupData = await instanceSock.groupFetchAllParticipating();
+        const groups = Object.values(groupData || {}).map((g) => ({
+          id: g.id,
+          subject: g.subject || 'Unnamed Group',
+          creation: g.creation ? new Date(g.creation * 1000) : null,
+          owner: g.owner || null,
+          size: Array.isArray(g.participants) ? g.participants.length : 0,
+          desc: g.desc || ''
+        }));
+        cachedGroups = groups;
+        cachedGroupsAt = Date.now();
+        return { success: true, groups };
+      } catch (err) {
+        serviceLogger.error('[WA_GROUPS_ERROR] Failed to fetch participating groups.', {
+          name: err?.name || 'Error',
+          statusCode: err?.output?.statusCode || null
+        });
+        if (cachedGroups) {
+          return { success: true, groups: cachedGroups };
+        }
+        return { success: false, error: 'Unable to fetch WhatsApp groups from the current connection.', groups: [] };
+      } finally {
+        inFlightGroupsPromise = null;
+      }
+    })();
+    return inFlightGroupsPromise;
   };
 
   return {

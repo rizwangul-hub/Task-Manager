@@ -10,6 +10,7 @@ import EmptyState from '../components/ui/EmptyState';
 import ErrorState from '../components/ui/ErrorState';
 import { whatsappService } from '../services/whatsappService';
 import { projectService } from '../services/projectService';
+import { socketService } from '../services/socket';
 import { useToast } from '../hooks/useToast';
 import {
   Inbox,
@@ -121,6 +122,21 @@ export const WhatsAppInboxPage = () => {
 
   useEffect(() => {
     fetchDrafts();
+
+    const socket = socketService.connect();
+    if (!socket) return;
+
+    const handleNewDraft = () => {
+      fetchDrafts();
+    };
+
+    socket.on('whatsapp:draft_created', handleNewDraft);
+    socket.on('whatsapp:draft_updated', handleNewDraft);
+
+    return () => {
+      socket.off('whatsapp:draft_created', handleNewDraft);
+      socket.off('whatsapp:draft_updated', handleNewDraft);
+    };
   }, [fetchDrafts]);
 
   // Open Review Modal

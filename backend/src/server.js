@@ -28,7 +28,7 @@ const startWhatsAppListener = () => {
 mongoose.connection.on('connected', startWhatsAppListener);
 
 // Connect to MongoDB
-connectDB();
+await connectDB();
 
 // Create standard HTTP server to support Socket.IO and Express
 const httpServer = http.createServer(app);

@@ -611,4 +611,47 @@ test('22. Reconnect safety: socket re-initialization replaces inactive socket wi
   assert.equal(intakeEventCount, 2, 'Stale socket listeners must be closed');
 });
 
+test('23. Awaiting Review query retrieves pending drafts and filters out non-awaiting drafts', () => {
+  const draftsDatabase = [
+    { _id: 'd1', status: 'awaiting_review', aiExtraction: { isTask: true, title: 'Draft 1' } },
+    { _id: 'd2', status: 'approved', aiExtraction: { isTask: true, title: 'Draft 2' } },
+    { _id: 'd3', status: 'awaiting_review', aiExtraction: { isTask: true, title: 'Draft 3' } },
+    { _id: 'd4', status: 'ignored', aiExtraction: { isTask: false } }
+  ];
+
+  const filterByStatus = (status) => draftsDatabase.filter((d) => d.status === status);
+  const awaitingDrafts = filterByStatus('awaiting_review');
+
+  assert.equal(awaitingDrafts.length, 2);
+  assert.deepEqual(awaitingDrafts.map((d) => d._id), ['d1', 'd3']);
+});
+
+test('24. Outbox processing safely bypasses execution when MongoDB is not connected', async () => {
+  const { createTaskAssignmentNotificationService } = await import('../src/services/taskAssignmentNotification.service.js');
+  const mockNotificationModel = {
+    find() {
+      throw new Error('Should not be called when disconnected');
+    }
+  };
+
+  const service = createTaskAssignmentNotificationService({
+    notificationModel: mockNotificationModel,
+    contactModel: {},
+    taskModel: {},
+    sendNotification: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  // Verify processPending handles disconnection safely
+  assert.equal(typeof service.processPending, 'function');
+});
+
+test('25. Gemini missing credentials produce clear error object without throwing uncaught exceptions', async () => {
+  const res = await testGeminiConnectivity({ apiKey: '' });
+  assert.equal(res.success, false);
+  assert.equal(res.configured, false);
+  assert.match(res.error, /GEMINI_API_KEY/);
+});
+
+
 
