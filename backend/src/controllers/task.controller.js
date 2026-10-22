@@ -5,6 +5,8 @@ import { Project } from '../models/project.model.js';
 import { User, USER_ROLES } from '../models/user.model.js';
 import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { notificationService } from '../services/notification.service.js';
+import { emailService } from '../services/email.service.js';
+import { env } from '../config/env.js';
 import { socketService } from '../services/socket.service.js';
 import { taskAssignmentNotificationService } from '../services/taskAssignmentNotification.service.js';
 import { sendWhatsAppTaskNotification } from '../services/whatsappService.js';
@@ -506,7 +508,6 @@ export const taskController = {
           req.user,
           populated.assignees.map((a) => a._id || a)
         );
-
       }
 
       if (assignedContact) {

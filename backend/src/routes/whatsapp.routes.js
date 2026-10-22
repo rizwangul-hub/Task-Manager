@@ -33,8 +33,11 @@ router.get('/diagnostics', ownerOnly, (req, res) => {
 
 router.post('/reconnect', ownerOnly, async (req, res, next) => {
   try {
+    const confirmRePair = req.body?.confirmRePair === true;
+    const forceRePair = req.body?.force === true || req.body?.forceRePair === true || confirmRePair;
     const result = await reconnectWhatsApp({
-      confirmRePair: req.body?.confirmRePair === true
+      confirmRePair,
+      forceRePair
     });
     res.set('Cache-Control', 'no-store, private');
     res.status(result.rePairConfirmationRequired ? 409 : result.success ? 200 : 503).json({
@@ -86,7 +89,7 @@ router.delete('/drafts/:id/raw-message', ownerOnly, whatsappDraftController.dele
  * Sends a test message to a specified verified test number using the connected sender account.
  */
 router.post('/test-message', ownerOnly, async (req, res, next) => {
-  const { testNumber } = req.body || {};
+  const { testNumber, customMessage } = req.body || {};
 
   if (!testNumber || typeof testNumber !== 'string' || !testNumber.trim()) {
     return next(new AppError('A valid test phone number or WhatsApp JID is required.', 400));
@@ -100,15 +103,17 @@ router.post('/test-message', ownerOnly, async (req, res, next) => {
     );
   }
 
-  const messageText = [
-    '🔔 *PixxTechnologiees Task Manager — WhatsApp Integration Test*',
-    '',
-    'This is a verified test message sent from your connected WhatsApp account.',
-    'Automated task assignment alerts and group monitoring are active.',
-    '',
-    `Sent at: ${new Date().toLocaleString()}`,
-    '_PixxTechnologiees Workspace_'
-  ].join('\n');
+  const messageText = (customMessage && typeof customMessage === 'string' && customMessage.trim())
+    ? customMessage.trim()
+    : [
+        '🔔 *PixxTechnologiees Task Manager — WhatsApp Integration Test*',
+        '',
+        'This is a verified test message sent from your connected WhatsApp account.',
+        'Automated task assignment alerts and group monitoring are active.',
+        '',
+        `Sent at: ${new Date().toLocaleString()}`,
+        '_PixxTechnologiees Workspace_'
+      ].join('\n');
 
   try {
     const result = await sendWhatsAppTaskNotification(testNumber.trim(), messageText, {

@@ -91,7 +91,7 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus }) => {
         </button>
 
         <div className="breadcrumb-trail">
-          <span className="breadcrumb-root">PixxTechnologiees</span>
+          <span className="breadcrumb-root">Task Manager</span>
           <span className="breadcrumb-separator">/</span>
           <span className="breadcrumb-current">{currentTitle}</span>
         </div>

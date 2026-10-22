@@ -60,8 +60,8 @@ export const Sidebar = ({
             </div>
             {!isCollapsed && (
               <div className="brand-info">
-                <span className="brand-title">PixxTechnologiees</span>
-                <span className="brand-subtitle">Task Manager</span>
+                <span className="brand-title">Task Manager</span>
+                <span className="brand-subtitle">by PixxTechnologies</span>
               </div>
             )}
           </div>

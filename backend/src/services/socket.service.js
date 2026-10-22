@@ -18,9 +18,19 @@ export const socketService = {
   init: async (httpServer) => {
     io = new Server(httpServer, {
       cors: {
-        origin: env.NODE_ENV === 'production'
-          ? env.FRONTEND_ORIGINS
-          : [...env.FRONTEND_ORIGINS, 'http://127.0.0.1:5173'],
+        origin: (origin, callback) => {
+          if (!origin) return callback(null, true);
+          if (env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
+            return callback(null, true);
+          }
+          const allowed = env.NODE_ENV === 'production'
+            ? env.FRONTEND_ORIGINS
+            : [...env.FRONTEND_ORIGINS, 'http://127.0.0.1:5173', 'http://127.0.0.1:5174'];
+          if (allowed.includes(origin) || /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.vercel\.app$/i.test(origin)) {
+            return callback(null, true);
+          }
+          return callback(null, false);
+        },
         credentials: true,
         methods: ['GET', 'POST']
       },

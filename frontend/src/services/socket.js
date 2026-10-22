@@ -72,9 +72,9 @@ export const socketService = {
     socketInstance = io(SOCKET_URL, {
       withCredentials: true,
       auth: { token },
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 3,
-      reconnectionDelay: 3000,
+      transports: ['polling', 'websocket'],
+      reconnectionAttempts: 5,
+      reconnectionDelay: 2000,
       autoConnect: true
     });
 

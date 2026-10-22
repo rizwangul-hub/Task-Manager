@@ -60,8 +60,8 @@ export const LoginPage = () => {
           <div className="login-logo-mark">
             <Sparkles size={28} />
           </div>
-          <h1 className="login-brand-title">PixxTechnologiees</h1>
-          <p className="login-brand-subtitle">Private Workspace • Manager Portal</p>
+          <h1 className="login-brand-title">Task Manager</h1>
+          <p className="login-brand-subtitle">by PixxTechnologies</p>
         </div>
 
         {/* Database Offline Notice */}

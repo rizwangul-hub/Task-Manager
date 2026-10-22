@@ -37,6 +37,8 @@ const allowedOrigins = env.NODE_ENV === 'production'
 const isOriginAllowed = (origin) => {
   if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
+  // In development, allow any localhost or 127.0.0.1 port (5173, 5174, etc.)
+  if (env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
   // Allow all Vercel deployment URLs (*.vercel.app)
   if (/^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.vercel\.app$/i.test(origin)) return true;
   return false;

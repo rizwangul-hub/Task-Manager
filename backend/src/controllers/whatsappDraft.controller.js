@@ -9,6 +9,8 @@ import { TaskEvent, TASK_EVENT_ACTIONS } from '../models/taskEvent.model.js';
 import { getParticipatingGroups, getWhatsAppDiagnostics } from '../services/whatsappService.js';
 import { extractTaskFromWhatsAppMessage } from '../services/aiTaskExtraction.service.js';
 import { socketService } from '../services/socket.service.js';
+import { emailService } from '../services/email.service.js';
+import { env } from '../config/env.js';
 import {
   getWhatsAppHistoryResetPreview,
   resetWhatsAppHistory
@@ -317,6 +319,7 @@ export const whatsappDraftController = {
         }
       }
 
+      res.set('Cache-Control', 'no-store, private');
       res.status(200).json({
         status: 'success',
         data: {

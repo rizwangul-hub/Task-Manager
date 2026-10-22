@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlignLeft,
   CalendarDays,
@@ -59,6 +60,32 @@ const TaskBoard = ({
   const canManage = canManageBoard();
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [openPopover, setOpenPopover] = useState(null);
+
+  useEffect(() => {
+    if (!openPopover) return;
+    const handleClickOutside = (e) => {
+      if (
+        !e.target.closest('.board-status-popover') &&
+        !e.target.closest('.board-assignee-popover') &&
+        !e.target.closest('.board-status-pill') &&
+        !e.target.closest('.board-assignee-trigger')
+      ) {
+        setOpenPopover(null);
+      }
+    };
+    const handleScroll = (e) => {
+      if (e.target?.closest?.('.board-status-popover') || e.target?.closest?.('.board-assignee-popover')) {
+        return;
+      }
+      setOpenPopover(null);
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [openPopover]);
   const [contactSearch, setContactSearch] = useState('');
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [editingTitle, setEditingTitle] = useState('');
@@ -364,16 +391,44 @@ const TaskBoard = ({
                               </td>
                               {visibleCols.assignees && (
                                 <td className="board-cell-popover">
-                                  <button type="button" className="board-assignee-trigger" aria-label={`Assign contact to ${task.title}`} disabled={!canManage} onClick={() => {
-                                    setOpenPopover(popoverId === 'assignees' ? null : { taskId: task._id, type: 'assignees' });
-                                    setContactSearch('');
-                                  }}>
+                                  <button
+                                    type="button"
+                                    className="board-assignee-trigger"
+                                    aria-label={`Assign contact to ${task.title}`}
+                                    disabled={!canManage}
+                                    onClick={(e) => {
+                                      if (popoverId === 'assignees') {
+                                        setOpenPopover(null);
+                                      } else {
+                                        const rect = e.currentTarget.getBoundingClientRect();
+                                        setOpenPopover({
+                                          taskId: task._id,
+                                          type: 'assignees',
+                                          rect: { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height }
+                                        });
+                                        setContactSearch('');
+                                      }
+                                    }}
+                                  >
                                     {assignedContact
                                       ? <span className="board-avatar" title={assignedContact.fullName}>{getInitials(assignedContact.fullName)}</span>
                                       : <span className="board-avatar board-avatar-empty"><Plus size={14} /></span>}
                                   </button>
-                                  {popoverId === 'assignees' && (
-                                    <div className="board-popover board-assignee-popover">
+                                  {popoverId === 'assignees' && openPopover?.rect && createPortal(
+                                    <div
+                                      className="board-popover board-assignee-popover board-assignee-popover-portal"
+                                      style={{
+                                        position: 'fixed',
+                                        zIndex: 99999,
+                                        width: '260px',
+                                        left: `${Math.max(12, Math.min(window.innerWidth - 272, openPopover.rect.left + (openPopover.rect.width / 2) - 130))}px`,
+                                        ...(openPopover.rect.top > 250
+                                          ? { bottom: `${window.innerHeight - openPopover.rect.top + 6}px`, top: 'auto' }
+                                          : { top: `${openPopover.rect.bottom + 6}px`, bottom: 'auto' }),
+                                        maxHeight: '320px',
+                                        overflowY: 'auto'
+                                      }}
+                                    >
                                       <div className="board-popover-title">Assign contact</div>
                                       <div className="board-assignee-search"><Search size={14} /><input autoFocus placeholder="Search contacts" value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} /></div>
                                       <p>The contact will receive a WhatsApp assignment notification.</p>
@@ -389,20 +444,63 @@ const TaskBoard = ({
                                         })}
                                         {contacts.every((contact) => !contact.isActive) && <p>No active contacts. Add one from Contacts.</p>}
                                       </div>
-                                    </div>
+                                    </div>,
+                                    document.body
                                   )}
                                 </td>
                               )}
                               {visibleCols.status && (
                                 <td className="board-cell-popover">
-                                  <button type="button" className={`board-status-pill status-color-${status.color}`} disabled={!canEditTask(task)} onClick={() => setOpenPopover(popoverId === 'status' ? null : { taskId: task._id, type: 'status' })}>{status.label}</button>
-                                  {popoverId === 'status' && canEditTask(task) && (
-                                    <div className="board-popover board-status-popover">
-                                      {STATUS_OPTIONS.map((option) => <button type="button" key={option.value} onClick={() => {
+                                  <button
+                                    type="button"
+                                    className={`board-status-pill status-color-${status.color}`}
+                                    disabled={!canEditTask(task)}
+                                    onClick={(e) => {
+                                      if (popoverId === 'status') {
                                         setOpenPopover(null);
-                                        void onUpdateTask(task, { status: option.value });
-                                      }}><span className={`status-swatch status-color-${option.color}`} />{option.label}{task.status === option.value && <Check size={14} />}</button>)}
-                                    </div>
+                                      } else {
+                                        const rect = e.currentTarget.getBoundingClientRect();
+                                        setOpenPopover({
+                                          taskId: task._id,
+                                          type: 'status',
+                                          rect: { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height }
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    {status.label}
+                                  </button>
+                                  {popoverId === 'status' && canEditTask(task) && openPopover?.rect && createPortal(
+                                    <div
+                                      className="board-popover board-status-popover board-status-popover-portal"
+                                      style={{
+                                        position: 'fixed',
+                                        zIndex: 99999,
+                                        width: '160px',
+                                        left: `${Math.max(12, Math.min(window.innerWidth - 172, openPopover.rect.left + (openPopover.rect.width / 2) - 80))}px`,
+                                        ...(openPopover.rect.top > 200
+                                          ? { bottom: `${window.innerHeight - openPopover.rect.top + 6}px`, top: 'auto' }
+                                          : { top: `${openPopover.rect.bottom + 6}px`, bottom: 'auto' }),
+                                        maxHeight: '270px',
+                                        overflowY: 'auto'
+                                      }}
+                                    >
+                                      {STATUS_OPTIONS.map((option) => (
+                                        <button
+                                          type="button"
+                                          key={option.value}
+                                          onClick={() => {
+                                            setOpenPopover(null);
+                                            void onUpdateTask(task, { status: option.value });
+                                          }}
+                                        >
+                                          <span className={`status-swatch status-color-${option.color}`} />
+                                          {option.label}
+                                          {task.status === option.value && <Check size={14} />}
+                                        </button>
+                                      ))}
+                                    </div>,
+                                    document.body
                                   )}
                                 </td>
                               )}

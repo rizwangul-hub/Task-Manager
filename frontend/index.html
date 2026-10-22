@@ -4,7 +4,17 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PixxTechnologiees Task Manager</title>
+    <title>Task Manager • by PixxTechnologies</title>
+    <script>
+      // Automatically unregister any stale service workers on localhost
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (registrations) {
+          for (var reg of registrations) {
+            reg.unregister();
+          }
+        }).catch(function () {});
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

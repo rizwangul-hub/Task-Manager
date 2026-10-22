@@ -58,6 +58,10 @@ export const env = {
   FRONTEND_URL: frontendUrl,
   FRONTEND_ORIGINS: [
     frontendUrl,
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
     ...(process.env.FRONTEND_URLS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
   ],
   REDIS_URL: process.env.REDIS_URL || '',

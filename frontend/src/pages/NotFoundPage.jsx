@@ -13,7 +13,7 @@ export const NotFoundPage = () => {
         <EmptyState
           icon={FileQuestion}
           title="404 - Page Not Found"
-          description="The URL you navigated to does not exist within the PixxTechnologiees Task Manager application."
+          description="The URL you navigated to does not exist within the Task Manager application."
           actionLabel="Return to Dashboard"
           actionIcon={Home}
           onAction={() => navigate('/')}

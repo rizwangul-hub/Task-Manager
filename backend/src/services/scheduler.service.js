@@ -41,14 +41,19 @@ export async function checkDeadlinesAndOverdue() {
       status: { $nin: [TASK_STATUSES.DONE, 'Completed'] }
     })
       .populate('assignees', 'name email')
+      .populate('creator', 'name email')
       .populate('project', 'name')
       .limit(500);
 
     for (const task of tasks) {
-      const recipients = [...new Set(
+      const recipientsSet = new Set(
         (task.assignees || []).map((assignee) => assignee.email?.trim()).filter(Boolean)
-      )];
-      if (!recipients.length && adminEmail) recipients.push(adminEmail.trim());
+      );
+      if (task.creator?.email) recipientsSet.add(task.creator.email.trim());
+      if (adminEmail) recipientsSet.add(adminEmail.trim());
+      if (env.EMAIL?.emailUser) recipientsSet.add(env.EMAIL.emailUser.trim());
+      const recipients = [...recipientsSet];
+
       if (!recipients.length) {
         logger.warn(`[SCHEDULER] No email recipient available for ${alertType} task ${task.taskKey}.`);
         continue;
@@ -317,6 +322,11 @@ export const schedulerService = {
 
     const cronExpr = env.SCHEDULER.cronExpr || '0 * * * *';
     logger.info(`[SCHEDULER] Starting background scheduler with schedule: "${cronExpr}"`);
+
+    // Run an initial pass right away on startup so pending deadlines are handled immediately
+    void schedulerService.runDueRemindersCheck().catch((err) => {
+      logger.error('[SCHEDULER] Initial due reminders check failed:', err);
+    });
 
     cronTask = cron.schedule(
       cronExpr,

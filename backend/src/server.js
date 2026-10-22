@@ -1,7 +1,7 @@
 import http from 'node:http';
 import mongoose from 'mongoose';
 import app from './app.js';
-import { env, validateEnv } from './config/env.js';
+import { env, validateEnv } from './config/env.js'; // configuration loaded
 import { connectDB, disconnectDB } from './config/db.js';
 import { socketService } from './services/socket.service.js';
 import { schedulerService } from './services/scheduler.service.js';

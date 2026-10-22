@@ -655,3 +655,167 @@ test('25. Gemini missing credentials produce clear error object without throwing
 
 
 
+
+test('26. Casual non-task message sets draft status to ignored and suppresses real-time broadcast', async () => {
+  let socketHandler;
+  const drafts = [];
+  const broadcasts = [];
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      const sock = {
+        user: { id: 'sender@s.whatsapp.net' },
+        ws: { readyState: 1 },
+        ev: {
+          on(evt, handler) {
+            if (evt === 'messages.upsert') socketHandler = handler;
+          },
+          removeAllListeners() {}
+        },
+        emit(evt, payload) {
+          if (evt === 'messages.upsert') socketHandler?.(payload);
+        },
+        end() {}
+      };
+      return sock;
+    },
+    reconnectDelaysMs: [60_000],
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findMonitoredGroup: async () => ({ groupName: 'General Chat', isPaused: false }),
+      updateGroupLastMessageAt: async () => {},
+      findDraft: async () => null,
+      createDraft: async (draftData) => {
+        const draft = { ...draftData, save: async () => {} };
+        drafts.push(draft);
+        return draft;
+      },
+      extractTask: async () => ({
+        extraction: { isTask: false, confidence: 0.99, reason: 'Casual greeting' },
+        provider: 'gemini'
+      }),
+      broadcastDraft: async (event, data) => {
+        broadcasts.push({ event, data });
+      }
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+  const casualMessage = {
+    key: { id: 'msg-greeting', remoteJid: '120363049482690322@g.us', participant: 'sender@s.whatsapp.net' },
+    pushName: 'Colleague',
+    messageTimestamp: Math.floor(new Date('2026-10-16T03:35:00.000Z').getTime() / 1000),
+    message: { conversation: 'Good morning' }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [casualMessage]
+  });
+
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].status, 'ignored');
+  assert.equal(drafts[0].aiExtraction.isTask, false);
+  assert.equal(broadcasts.length, 0, 'Non-task messages must NOT trigger whatsapp:draft_created broadcast');
+  await service.close();
+});
+
+
+test('27. Both manager (fromMe: true) and boss/team messages with actionable tasks create awaiting_review drafts when WHATSAPP_ALLOW_FROM_ME=true', async () => {
+  const previousEnv = process.env.WHATSAPP_ALLOW_FROM_ME;
+  process.env.WHATSAPP_ALLOW_FROM_ME = 'true';
+  try {
+    let socketHandler;
+    const drafts = [];
+    const broadcasts = [];
+    const service = createWhatsAppService({
+      authStateFactory: async () => ({
+        state: { creds: { registered: true } },
+        saveCreds: async () => {}
+      }),
+      socketFactory: () => {
+        const sock = {
+          user: { id: 'me@s.whatsapp.net', name: 'Rizwan' },
+          ws: { readyState: 1 },
+          ev: {
+            on(evt, handler) {
+              if (evt === 'messages.upsert') socketHandler = handler;
+            },
+            removeAllListeners() {}
+          },
+          emit(evt, payload) {
+            if (evt === 'messages.upsert') socketHandler?.(payload);
+          },
+          end() {}
+        };
+        return sock;
+      },
+      reconnectDelaysMs: [60_000],
+      inboundDependencies: {
+        getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+        findMonitoredGroup: async () => ({ groupName: 'Task', isPaused: false }),
+        updateGroupLastMessageAt: async () => {},
+        findDraft: async () => null,
+        createDraft: async (draftData) => {
+          const draft = { ...draftData, save: async () => {} };
+          drafts.push(draft);
+          return draft;
+        },
+        extractTask: async () => ({
+          extraction: { isTask: true, title: 'Action task', confidence: 0.95 },
+          provider: 'gemini'
+        }),
+        broadcastDraft: async (event, data) => {
+          broadcasts.push({ event, data });
+        }
+      },
+      serviceLogger: { info() {}, warn() {}, error() {} }
+    });
+
+    await service.initialize();
+    const socket = service.getSocket();
+
+    // 1. Message from 'me' (user themselves via append or notify)
+    const myMessage = {
+      key: { id: 'msg-from-me', remoteJid: '120363049482690322@g.us', fromMe: true },
+      pushName: '',
+      messageTimestamp: Math.floor(new Date('2026-10-16T03:35:00.000Z').getTime() / 1000),
+      message: { conversation: 'Ahmed, please review the landing page by tomorrow 5pm' }
+    };
+    socket.emit('messages.upsert', {
+      type: 'append',
+      messages: [myMessage]
+    });
+    await service.waitForInboundProcessing();
+
+    // 2. Message from 'boss' (team member in group)
+    const bossMessage = {
+      key: { id: 'msg-from-boss', remoteJid: '120363049482690322@g.us', fromMe: false, participant: 'boss@s.whatsapp.net' },
+      pushName: 'Boss',
+      messageTimestamp: Math.floor(new Date('2026-10-16T03:36:00.000Z').getTime() / 1000),
+      message: { conversation: 'Rizwan, please submit financial report by Friday' }
+    };
+    socket.emit('messages.upsert', {
+      type: 'notify',
+      messages: [bossMessage]
+    });
+    await service.waitForInboundProcessing();
+
+    assert.equal(drafts.length, 2);
+    assert.equal(drafts[0].senderName, 'Rizwan');
+    assert.equal(drafts[0].status, 'awaiting_review');
+    assert.equal(drafts[1].senderName, 'Boss');
+    assert.equal(drafts[1].status, 'awaiting_review');
+    assert.equal(broadcasts.length, 2);
+    await service.close();
+  } finally {
+    process.env.WHATSAPP_ALLOW_FROM_ME = previousEnv;
+  }
+});

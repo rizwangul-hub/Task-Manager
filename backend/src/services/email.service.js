@@ -84,13 +84,13 @@ const wrapInEmailLayout = (title, contentHtml) => `
 <body>
   <div class="email-container">
     <div class="email-header">
-      Pixx<span>Technologiees</span> Task Manager
+      Task Manager <span style="font-size: 13px; font-weight: normal; opacity: 0.85; display: block; margin-top: 2px;">by PixxTechnologies</span>
     </div>
     <div class="email-body">
       ${contentHtml}
     </div>
     <div class="email-footer">
-      This is an automated operational notification from PixxTechnologiees Task Manager.<br>
+      This is an automated operational notification from Task Manager by PixxTechnologies.<br>
       You can manage your notification preferences in your account settings.
     </div>
   </div>
@@ -146,6 +146,10 @@ export const resolveEmailRecipient = (to) => {
 };
 
 export const sendTaskNotificationEmail = async ({ to, subject, htmlContent, textContent }) => {
+  if (process.env.NODE_ENV === 'test') {
+    logger.info('[EMAIL_TEST_MODE] Delivery suppressed in test environment.');
+    return { success: true, messageId: '<test-email-suppressed>' };
+  }
   if (!emailService.isConfigured()) {
     logger.info(`[EMAIL_SUPPRESSED] Email transport unconfigured. Email not sent to ${to}: "${subject}"`);
     return { success: false, reason: 'unconfigured' };
@@ -212,6 +216,36 @@ export const emailService = {
    * Templates
    */
   templates: {
+    taskCreated: ({ taskTitle, taskKey, projectName, creatorName, priority, dueDate, actionUrl }) => {
+      const safeTitle = escapeHtml(taskTitle);
+      const safeTaskKey = escapeHtml(taskKey);
+      const safeProjectName = escapeHtml(projectName);
+      const safeCreatorName = escapeHtml(creatorName || 'A team member');
+      const safePriority = escapeHtml(priority || 'Medium');
+      const safeDueDate = escapeHtml(dueDate || 'None');
+      const safeActionUrl = escapeHtml(actionUrl);
+      const subject = `[New Task] ${taskKey}: ${taskTitle}`;
+      const text = `A new task was created: ${taskKey} - "${taskTitle}" in project "${projectName}" by ${creatorName}. Priority: ${priority}. Due Date: ${dueDate || 'Not set'}. View task: ${actionUrl}`;
+      const html = wrapInEmailLayout(
+        escapeHtml(subject),
+        `
+        <span class="task-badge">${safeTaskKey}</span>
+        <h2 style="margin-top: 4px; margin-bottom: 12px; font-size: 20px;">New Task Created</h2>
+        <p><strong>${safeCreatorName}</strong> created a new deliverable:</p>
+        <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 16px; margin: 16px 0; border-radius: 4px;">
+          <h3 style="margin: 0 0 6px 0; font-size: 16px;">${safeTitle}</h3>
+          <p style="margin: 0; font-size: 14px; color: #475569;">
+            <strong>Board:</strong> ${safeProjectName}<br>
+            <strong>Priority:</strong> ${safePriority}<br>
+            <strong>Due Date:</strong> ${safeDueDate}
+          </p>
+        </div>
+        <a href="${safeActionUrl}" class="btn">View Task Details</a>
+        `
+      );
+      return { subject, text, html };
+    },
+
     taskAssigned: ({ taskTitle, taskKey, projectName, groupName, assignerName, dueDate, priority, actionUrl }) => {
       const safeTaskTitle = escapeHtml(taskTitle);
       const safeTaskKey = escapeHtml(taskKey);
@@ -239,6 +273,41 @@ export const emailService = {
           </p>
         </div>
         <a href="${safeActionUrl}" class="btn">View Task Details</a>
+        `
+      );
+      return { subject, text, html };
+    },
+
+    whatsappDraftReceived: ({ draftTitle, groupName, senderName, senderPhone, priority, dueDate, rawMessage, actionUrl }) => {
+      const safeTitle = escapeHtml(draftTitle || 'New WhatsApp Task Draft');
+      const safeGroupName = escapeHtml(groupName || 'WhatsApp Group');
+      const safeSenderName = escapeHtml(senderName || senderPhone || 'A team member');
+      const safeSenderPhone = escapeHtml(senderPhone || '');
+      const safePriority = escapeHtml(priority || 'Medium');
+      const safeDueDate = escapeHtml(dueDate || 'Not specified');
+      const safeRawMessage = escapeHtml(rawMessage || '');
+      const safeActionUrl = escapeHtml(actionUrl);
+      const subject = `[WhatsApp Draft] Awaiting Review: ${draftTitle ? draftTitle.replace(/[\r\n]+/g, ' ') : 'New Task Detected'}`;
+      const text = `A new task draft was extracted from WhatsApp group "${groupName}" by ${senderName} (${senderPhone}). Title: "${draftTitle}". Priority: ${priority}. Due Date: ${dueDate || 'Not set'}. Review draft: ${actionUrl}`;
+      const html = wrapInEmailLayout(
+        escapeHtml(subject),
+        `
+        <span class="task-badge" style="background: #fef3c7; color: #b45309;">WhatsApp Draft &bull; Awaiting Review</span>
+        <h2 style="margin-top: 4px; margin-bottom: 12px; font-size: 20px;">New WhatsApp Task Detected</h2>
+        <p>A new actionable task instruction was received from <strong>${safeSenderName}</strong>${safeSenderPhone ? ` (${safeSenderPhone})` : ''} in <strong>${safeGroupName}</strong>:</p>
+        <div style="background: #f8fafc; border-left: 4px solid #f59e0b; padding: 12px 16px; margin: 16px 0; border-radius: 4px;">
+          <h3 style="margin: 0 0 6px 0; font-size: 16px; color: #0f172a;">${safeTitle}</h3>
+          <p style="margin: 0 0 8px 0; font-size: 14px; color: #475569;">
+            <strong>Group:</strong> ${safeGroupName}<br>
+            <strong>Priority:</strong> ${safePriority}<br>
+            <strong>Due Date:</strong> ${safeDueDate}
+          </p>
+          <div style="font-size: 13px; color: #475569; background: #ffffff; padding: 10px 14px; border-radius: 4px; border: 1px dashed #cbd5e1; margin-top: 8px;">
+            <strong>Original WhatsApp message:</strong><br>
+            <em>"${safeRawMessage}"</em>
+          </div>
+        </div>
+        <a href="${safeActionUrl}" class="btn" style="background: #2563eb;">Review & Approve Task</a>
         `
       );
       return { subject, text, html };

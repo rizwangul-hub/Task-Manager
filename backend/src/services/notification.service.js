@@ -22,8 +22,16 @@ import { TASK_STATUSES } from '../models/task.model.js';
 const isNotificationAllowedByPreferences = (user, type, channel = 'in_app') => {
   const prefs = user.notificationPreferences || {};
 
-  if (channel === 'email' && prefs.emailNotifications === false) {
-    return false;
+  if (channel === 'email') {
+    if (prefs.emailNotifications === false) return false;
+    const allowedEmailTypes = [
+      NOTIFICATION_TYPES.TASK_OVERDUE,
+      NOTIFICATION_TYPES.TASK_UPCOMING_DUE,
+      NOTIFICATION_TYPES.DEADLINE_NEAR
+    ];
+    if (!allowedEmailTypes.includes(type)) {
+      return false;
+    }
   }
 
   switch (type) {
@@ -264,25 +272,7 @@ export const notificationService = {
       });
     }
 
-    if (!recipientIdsWithEmail.length && env.EMAIL.emailUser) {
-      const emailTemplate = emailService.templates.taskAssigned({
-        taskTitle: task.title,
-        taskKey: task.taskKey,
-        projectName,
-        groupName: task.groupTitle || task.groupName || '',
-        assignerName: assigner?.name || 'A team manager',
-        dueDate: task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'None',
-        priority: task.priority,
-        actionUrl
-      });
-      void sendTaskNotificationEmail({
-        to: env.EMAIL.emailUser,
-        subject: emailTemplate.subject,
-        htmlContent: emailTemplate.html
-      }).catch((error) => {
-        logger.error(`[EMAIL_FAILED] Task notification fallback email failed: ${error.message}`);
-      });
-    }
+
   },
 
   /**

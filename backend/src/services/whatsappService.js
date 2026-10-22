@@ -5,8 +5,10 @@ import makeWASocket, {
   Browsers,
   WAMessageStatus,
   isJidBroadcast,
-  isJidNewsletter
+  isJidNewsletter,
+  proto
 } from '@whiskeysockets/baileys';
+import NodeCache from '@cacheable/node-cache';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
@@ -78,7 +80,7 @@ const installCryptoConsoleErrorFilter = (serviceLogger) => {
       const message = args.map((value) =>
         typeof value === 'string' ? value : value?.message || ''
       ).join(' ');
-      if (/Failed to decrypt message with any known session|Session error: Bad MAC|Bad MAC/.test(message)) {
+      if (/Failed to decrypt message with any known session|Session error: Bad MAC|Bad MAC|Over 2000 messages into the future|Session error/i.test(message)) {
         state.suppressedErrors += 1;
         const now = Date.now();
         if (now - state.lastWarningAt >= 60_000) {
@@ -126,7 +128,7 @@ const createBaileysLogger = (serviceLogger) => {
 
       const message = [entry.msg, entry.err?.message].filter(Boolean).join(' ');
       const now = Date.now();
-      if (/Bad MAC|Failed to decrypt message with any known session|Session error/i.test(message)) {
+      if (/Bad MAC|Failed to decrypt message with any known session|Session error|Over 2000 messages into the future/i.test(message)) {
         suppressedCryptoErrors += 1;
         if (now - lastCryptoWarningAt >= 60_000) {
           serviceLogger.warn(
@@ -240,19 +242,11 @@ export const createWhatsAppService = ({
   const connectionWaiters = new Set();
   let inboundQueue = Promise.resolve();
   const pendingExtractions = new Set();
-  const msgRetryCounterMap = new Map();
-  const msgRetryCounterCache = {
-    get: (key) => msgRetryCounterMap.get(key),
-    set: (key, val) => {
-      if (msgRetryCounterMap.size > 2000) {
-        const first = msgRetryCounterMap.keys().next().value;
-        msgRetryCounterMap.delete(first);
-      }
-      msgRetryCounterMap.set(key, val);
-    },
-    del: (key) => msgRetryCounterMap.delete(key),
-    flushAll: () => msgRetryCounterMap.clear()
-  };
+  const inFlightMessageKeys = new Set();
+  const msgRetryCounterCache = new NodeCache({
+    stdTTL: 3600,
+    useClones: false
+  });
   let cachedGroups = null;
   let cachedGroupsAt = 0;
   let inFlightGroupsPromise = null;
@@ -320,8 +314,16 @@ export const createWhatsAppService = ({
     const messageId = msg.key?.id || 'unknown';
     const isGroup = remoteJid.endsWith('@g.us');
     const fromMe = Boolean(msg.key?.fromMe);
-    const senderJid = msg.key?.participant || msg.participant || remoteJid;
-    const senderName = msg.pushName || '';
+    const senderJid = msg.key?.participant || msg.participant || (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid);
+    let senderName = msg.pushName || '';
+    if (!senderName) {
+      if (fromMe) {
+        senderName = instanceSock?.user?.name || 'Me';
+      } else {
+        const phone = normalizeWhatsAppPhoneNumber(senderJid);
+        senderName = phone ? ('+' + phone) : 'Group Member';
+      }
+    }
 
     if (!isGroup || remoteJid === 'status@broadcast') {
       serviceLogger.info('[WA_INBOUND_FILTER] Ignored non-group message or status broadcast.', {
@@ -417,6 +419,12 @@ export const createWhatsAppService = ({
       );
     }
 
+    const messageKey = `${remoteJid}:${messageId}`;
+    if (inFlightMessageKeys.has(messageKey)) {
+      serviceLogger.info('[WA_INBOUND_DUP] Message is currently being processed; skipped duplicate.');
+      return;
+    }
+
     let existing;
     if (inboundDependencies.findDraft) {
       existing = await inboundDependencies.findDraft(remoteJid, messageId);
@@ -429,41 +437,7 @@ export const createWhatsAppService = ({
       return;
     }
 
-    let draft;
-    try {
-      const draftData = {
-        groupJid: remoteJid,
-        groupName: monitored.groupName || '',
-        messageId,
-        senderJid,
-        senderName,
-        messageTimestamp,
-        rawMessageText: messageText,
-        attempts: 1
-      };
-      if (inboundDependencies.createDraft) {
-        draft = await inboundDependencies.createDraft(draftData);
-      } else {
-        const { TaskDraft, TASK_DRAFT_STATUSES } = await import('../models/taskDraft.model.js');
-        draft = await TaskDraft.create({
-          ...draftData,
-          status: TASK_DRAFT_STATUSES.AWAITING_REVIEW
-        });
-      }
-    } catch (createErr) {
-      if (createErr.code === 11000) {
-        serviceLogger.info('[WA_INBOUND_DUP_INDEX] Unique message index prevented a concurrent duplicate draft.');
-        return;
-      }
-      throw createErr;
-    }
-
-    counters.totalDraftsCreated += 1;
-    serviceLogger.info('[WA_DRAFT_INIT] Draft record created in MongoDB.', {
-      draftId: String(draft._id || ''),
-      messageId: draft.messageId,
-      status: draft.status
-    });
+    inFlightMessageKeys.add(messageKey);
 
     const extractionTask = (async () => {
       try {
@@ -492,29 +466,70 @@ export const createWhatsAppService = ({
           newStatus = 'needs_clarification';
         }
 
-        draft.aiExtraction = extraction;
-        draft.status = newStatus;
-        draft.extractorProvider = provider;
-        draft.processingError = fallbackReason || null;
-        await draft.save();
-
-        serviceLogger.info('[WA_DRAFT_SAVED] Task draft persisted to MongoDB successfully.', {
-          draftId: String(draft._id || ''),
-          messageId: draft.messageId,
-          status: draft.status,
-          provider,
-          isTask: Boolean(extraction.isTask),
-          title: extraction.title || '(none)'
-        });
-
-        serviceLogger.info('[WA_EXTRACT_RESULT] Extraction completed.', {
-          isTask: Boolean(extraction.isTask),
-          confidence: extraction.confidence,
-          provider,
+        let draft;
+        const draftData = {
+          groupJid: remoteJid,
+          groupName: monitored.groupName || '',
+          messageId,
+          senderJid,
+          senderName,
+          messageTimestamp,
+          rawMessageText: messageText,
           status: newStatus,
-          fallbackUsed: Boolean(fallbackReason)
-        });
-        serviceLogger.info('[WA_DRAFT_PERSISTED] Task draft saved for review.', { draftId: String(draft._id || '') });
+          aiExtraction: extraction,
+          extractorProvider: provider,
+          processingError: fallbackReason || null,
+          attempts: 1
+        };
+
+        try {
+          if (inboundDependencies.createDraft) {
+            draft = await inboundDependencies.createDraft(draftData);
+            if (draft) {
+              draft.aiExtraction = extraction;
+              draft.status = newStatus;
+              draft.extractorProvider = provider;
+              draft.processingError = fallbackReason || null;
+              await draft.save?.();
+            }
+          } else {
+            const { TaskDraft } = await import('../models/taskDraft.model.js');
+            draft = await TaskDraft.create(draftData);
+          }
+        } catch (createErr) {
+          if (createErr.code === 11000) {
+            serviceLogger.info('[WA_INBOUND_DUP_INDEX] Unique message index prevented a concurrent duplicate draft.');
+            return;
+          }
+          throw createErr;
+        }
+
+        if (newStatus === 'ignored') {
+          serviceLogger.info('[WA_DRAFT_IGNORED] Message classified as non-task (casual chat). Saved as ignored, omitted from review queue and real-time alerts.', {
+            draftId: String(draft?._id || ''),
+            messageId,
+            reason: extraction.reason || 'Not an actionable task'
+          });
+        } else {
+          counters.totalDraftsCreated += 1;
+          serviceLogger.info('[WA_DRAFT_SAVED] Task draft persisted to MongoDB successfully.', {
+            draftId: String(draft?._id || ''),
+            messageId: draft?.messageId,
+            status: draft?.status,
+            provider,
+            isTask: Boolean(extraction.isTask),
+            title: extraction.title || '(none)'
+          });
+
+          serviceLogger.info('[WA_EXTRACT_RESULT] Extraction completed.', {
+            isTask: Boolean(extraction.isTask),
+            confidence: extraction.confidence,
+            provider,
+            status: newStatus,
+            fallbackUsed: Boolean(fallbackReason)
+          });
+          serviceLogger.info('[WA_DRAFT_PERSISTED] Task draft saved for review.', { draftId: String(draft?._id || '') });
+        }
 
         if (!inboundDependencies.getCheckpoint) {
           try {
@@ -529,40 +544,87 @@ export const createWhatsAppService = ({
           }
         }
 
-        if (inboundDependencies.broadcastDraft) {
-          await inboundDependencies.broadcastDraft('whatsapp:draft_created', draft);
-        } else {
-          const { socketService } = await import('./socket.service.js');
-          socketService.broadcast('whatsapp:draft_created', draft);
-        }
-        serviceLogger.info('[WA_BROADCAST] Task draft update broadcast to real-time clients.');
-      } catch (aiErr) {
-        counters.totalExtractionFailures += 1;
-        serviceLogger.error('[WA_EXTRACTION_ERROR] Task extraction failed.', {
-          name: aiErr?.name || 'Error',
-          status: aiErr?.status || null
-        });
-        draft.status = 'failed';
-        draft.processingError = 'Task extraction failed. Review server diagnostics and retry extraction.';
-        try {
-          await draft.save();
-        } catch (saveError) {
-          serviceLogger.error('[WA_EXTRACTION_ERROR] Could not persist failed extraction status.', {
-            name: saveError?.name || 'Error'
-          });
-        }
-        try {
+        if (newStatus !== 'ignored') {
           if (inboundDependencies.broadcastDraft) {
             await inboundDependencies.broadcastDraft('whatsapp:draft_created', draft);
           } else {
             const { socketService } = await import('./socket.service.js');
             socketService.broadcast('whatsapp:draft_created', draft);
           }
-        } catch (broadcastError) {
-          serviceLogger.error('[WA_EXTRACTION_ERROR] Could not broadcast failed draft status.', {
-            name: broadcastError?.name || 'Error'
+          serviceLogger.info('[WA_BROADCAST] Task draft update broadcast to real-time clients.');
+
+          try {
+            const { emailService } = await import('./email.service.js');
+            const { env } = await import('../config/env.js');
+            const recipient = env.EMAIL?.emailUser || process.env.INITIAL_ADMIN_EMAIL;
+            if (recipient) {
+              const actionUrl = `${env.FRONTEND_URL || 'http://localhost:5173'}/whatsapp-inbox`;
+              const template = emailService.templates.whatsappDraftReceived({
+                draftTitle: extraction?.title || 'New WhatsApp Task Draft',
+                groupName: monitored.groupName || remoteJid,
+                senderName,
+                senderPhone: senderJid,
+                priority: extraction?.priority || 'Medium',
+                dueDate: extraction?.dueDate ? new Date(extraction.dueDate).toLocaleDateString() : 'Not specified',
+                rawMessage: messageText,
+                actionUrl
+              });
+              void emailService.sendEmail({
+                to: recipient,
+                subject: template.subject,
+                html: template.html,
+                text: template.text
+              }).catch((err) => {
+                serviceLogger.warn('[WA_EMAIL_WARN] Failed to send WhatsApp draft alert email:', {
+                  error: err?.message || String(err)
+                });
+              });
+            }
+          } catch (emailErr) {
+            serviceLogger.warn('[WA_EMAIL_WARN] Could not construct WhatsApp draft alert email:', {
+              error: emailErr?.message || String(emailErr)
+            });
+          }
+        }
+      } catch (aiErr) {
+        counters.totalExtractionFailures += 1;
+        serviceLogger.error('[WA_EXTRACTION_ERROR] Task extraction failed.', {
+          name: aiErr?.name || 'Error',
+          status: aiErr?.status || null
+        });
+        try {
+          const failedData = {
+            groupJid: remoteJid,
+            groupName: monitored.groupName || '',
+            messageId,
+            senderJid,
+            senderName,
+            messageTimestamp,
+            rawMessageText: messageText,
+            status: 'failed',
+            processingError: 'Task extraction failed. Review server diagnostics and retry extraction.',
+            attempts: 1
+          };
+          let failedDraft;
+          if (inboundDependencies.createDraft) {
+            failedDraft = await inboundDependencies.createDraft(failedData);
+          } else {
+            const { TaskDraft } = await import('../models/taskDraft.model.js');
+            failedDraft = await TaskDraft.create(failedData);
+          }
+          if (inboundDependencies.broadcastDraft) {
+            await inboundDependencies.broadcastDraft('whatsapp:draft_created', failedDraft);
+          } else {
+            const { socketService } = await import('./socket.service.js');
+            socketService.broadcast('whatsapp:draft_created', failedDraft);
+          }
+        } catch (saveError) {
+          serviceLogger.error('[WA_EXTRACTION_ERROR] Could not persist failed extraction status.', {
+            name: saveError?.name || 'Error'
           });
         }
+      } finally {
+        inFlightMessageKeys.delete(messageKey);
       }
     })();
     pendingExtractions.add(extractionTask);
@@ -640,7 +702,7 @@ export const createWhatsAppService = ({
     return basename(backupPath);
   };
 
-  const reconnect = async ({ confirmRePair = false } = {}) => {
+  const reconnect = async ({ confirmRePair = false, forceRePair = false } = {}) => {
     if (reconnectPromise) return reconnectPromise;
     if (isUnsupportedServerlessRuntime()) {
       return {
@@ -661,6 +723,7 @@ export const createWhatsAppService = ({
       };
     }
     if (confirmRePair &&
+      !forceRePair &&
       connectionState !== CONNECTION_STATES.LOGGED_OUT &&
       !rePairConfirmationRequired) {
       return {
@@ -823,6 +886,7 @@ export const createWhatsAppService = ({
           syncFullHistory: false,
           browser: Browsers.ubuntu('Chrome'),
           msgRetryCounterCache,
+          retryRequestDelayMs: 500,
           shouldIgnoreJid: (jid) => !jid || isJidBroadcast(jid) || (isJidNewsletter ? isJidNewsletter(jid) : String(jid).endsWith('@newsletter')),
           keepAliveIntervalMs: 25_000,
           defaultQueryTimeoutMs: 90_000,
@@ -840,7 +904,7 @@ export const createWhatsAppService = ({
             } catch {
               // Ignore lookup errors
             }
-            return undefined;
+            return proto.Message.fromObject({});
           }
         });
         instanceSock = newSock;
@@ -857,6 +921,32 @@ export const createWhatsAppService = ({
             lastError = redactError(error);
             serviceLogger.error(`[WA_DELIVERY_RECEIPT] Could not persist message receipt: ${lastError}`);
           });
+
+          if (Array.isArray(updates)) {
+            for (const item of updates) {
+              if (item?.update?.message && item?.key) {
+                const syntheticMessage = {
+                  key: item.key,
+                  message: item.update.message,
+                  messageTimestamp: item.update.messageTimestamp || Math.floor(Date.now() / 1000),
+                  pushName: item.update.pushName || ''
+                };
+                serviceLogger.info('[WA_INBOUND][MESSAGE_UPDATE_RECEIVED] Processing decrypted/updated message.', {
+                  id: item.key.id,
+                  remoteJid: item.key.remoteJid
+                });
+                void enqueueInboundWork(async () => {
+                  try {
+                    await processInboundMessage(syntheticMessage);
+                  } catch (error) {
+                    serviceLogger.error('[WA_INBOUND_ERROR] Failed to process updated WhatsApp message.', {
+                      message: redactError(error?.message || '')
+                    });
+                  }
+                });
+              }
+            }
+          }
         });
 
         newSock.ev.on('messages.upsert', (upsertData) => {
@@ -877,28 +967,37 @@ export const createWhatsAppService = ({
             }))
           });
 
-          if (type !== 'notify' || !Array.isArray(messages)) {
-            serviceLogger.info('[WA_INBOUND_FILTER] Ignored upsert event with non-notify type.', {
+          const isAllowedType = type === 'notify' || (type === 'append' && process.env.WHATSAPP_ALLOW_FROM_ME === 'true');
+          if (!isAllowedType || !Array.isArray(messages)) {
+            serviceLogger.info('[WA_INBOUND_FILTER] Ignored upsert event with non-allowed type.', {
               type,
               count: msgList.length
             });
             return;
           }
 
+          const messagesToProcess = type === 'append'
+            ? messages.filter((m) => Boolean(m?.key?.fromMe))
+            : messages;
+
+          if (messagesToProcess.length === 0) {
+            return;
+          }
+
           const messageIds = [];
-          for (const message of messages) {
+          for (const message of messagesToProcess) {
             if (message.key?.id && message.message) {
               cacheRecentWhatsAppMessage(message.key.id, message.message);
             }
             if (message.key?.id) messageIds.push(message.key.id);
           }
-          counters.totalMessagesReceived += messages.length;
+          counters.totalMessagesReceived += messagesToProcess.length;
           serviceLogger.info('[WA_INBOUND][MESSAGE_RECEIVED] New-message event received.', {
-            messageCount: messages.length,
+            messageCount: messagesToProcess.length,
             messageIds: messageIds.slice(0, 20)
           });
           void enqueueInboundWork(async () => {
-            for (const message of messages) {
+            for (const message of messagesToProcess) {
               try {
                 await processInboundMessage(message);
               } catch (error) {
