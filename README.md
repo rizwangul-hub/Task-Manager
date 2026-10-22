@@ -582,4 +582,5 @@ Ensure the following variables are defined in your production environment:
 - **User Preference Center**: Granular notification toggles for email delivery and notification types in User Settings.
 - **UI Notifications Hub & TopNav Dropdown**: Dynamic badge counter, floating popover with one-click read actions, and dedicated full-page notifications management with filters and direct task navigation.
 #   T a s k - M a n a g e r  
+ #   T a s k - M a n a g e r  
  
