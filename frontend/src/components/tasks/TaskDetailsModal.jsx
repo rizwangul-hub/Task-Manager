@@ -578,6 +578,26 @@ export const TaskDetailsModal = ({
                         "{task.sourceMetadata.rawMessageText}"
                       </div>
                     )}
+                    {(task.previewImage?.url || task.attachments?.some(a => a.fileType?.startsWith('image/'))) && (
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <strong style={{ fontSize: '0.75rem', color: '#166534', display: 'block', marginBottom: '0.35rem' }}>
+                          📷 WhatsApp Attached Picture:
+                        </strong>
+                        <a
+                          href={task.previewImage?.url || task.attachments.find(a => a.fileType?.startsWith('image/'))?.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Click to view full image in Cloudinary"
+                          style={{ display: 'inline-block', borderRadius: '4px', overflow: 'hidden', border: '1px solid #86efac', background: '#000' }}
+                        >
+                          <img
+                            src={task.previewImage?.url || task.attachments.find(a => a.fileType?.startsWith('image/'))?.url}
+                            alt="WhatsApp attachment"
+                            style={{ maxHeight: '140px', maxWidth: '100%', objectFit: 'contain', display: 'block' }}
+                          />
+                        </a>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

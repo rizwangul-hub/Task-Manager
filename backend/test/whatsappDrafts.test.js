@@ -884,3 +884,94 @@ test('28. messages.update event with decrypted message content creates an awaiti
   assert.equal(drafts[0].status, 'awaiting_review');
   await service.close();
 });
+
+test('29. Inbound WhatsApp message with image attachment uploads to Cloudinary and persists attachments/previewImage to draft', async () => {
+  let socketHandler;
+  const drafts = [];
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      const sock = {
+        user: { id: 'me@s.whatsapp.net', name: 'Rizwan' },
+        ws: { readyState: 1 },
+        ev: {
+          on(evt, handler) {
+            if (evt === 'messages.upsert') socketHandler = handler;
+          },
+          removeAllListeners() {}
+        },
+        emit(evt, payload) {
+          if (evt === 'messages.upsert') socketHandler?.(payload);
+        },
+        end() {}
+      };
+      return sock;
+    },
+    reconnectDelaysMs: [60_000],
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findMonitoredGroup: async () => ({ groupName: 'Task', isPaused: false }),
+      updateGroupLastMessageAt: async () => {},
+      findDraft: async () => null,
+      uploadMedia: async () => ({
+        attachments: [
+          {
+            publicId: 'pixx_task_manager/wa_sample_img_123',
+            url: 'https://res.cloudinary.com/demo/image/upload/sample.jpg',
+            fileName: 'wa_img_sample.jpg',
+            fileType: 'image/jpeg',
+            bytes: 54321,
+            uploadedAt: new Date()
+          }
+        ],
+        previewImage: {
+          publicId: 'pixx_task_manager/wa_sample_img_123',
+          url: 'https://res.cloudinary.com/demo/image/upload/sample.jpg'
+        }
+      }),
+      createDraft: async (draftData) => {
+        const draft = { ...draftData, save: async () => {} };
+        drafts.push(draft);
+        return draft;
+      },
+      extractTask: async () => ({
+        extraction: { isTask: true, title: 'Fix hero section banner', confidence: 0.95 },
+        provider: 'gemini'
+      }),
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+
+  const imageMessage = {
+    key: { id: 'msg-img-123', remoteJid: '120363049482690322@g.us', fromMe: false, participant: 'boss@s.whatsapp.net' },
+    pushName: 'Boss',
+    messageTimestamp: Math.floor(new Date('2026-10-16T03:38:00.000Z').getTime() / 1000),
+    message: {
+      imageMessage: {
+        caption: 'Please fix this banner layout as shown in the screenshot by Friday',
+        mimetype: 'image/jpeg',
+        url: 'https://mmg.whatsapp.net/sample'
+      }
+    }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [imageMessage]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].status, 'awaiting_review');
+  assert.equal(drafts[0].attachments?.length, 1);
+  assert.equal(drafts[0].attachments[0].url, 'https://res.cloudinary.com/demo/image/upload/sample.jpg');
+  assert.equal(drafts[0].previewImage?.url, 'https://res.cloudinary.com/demo/image/upload/sample.jpg');
+  await service.close();
+});

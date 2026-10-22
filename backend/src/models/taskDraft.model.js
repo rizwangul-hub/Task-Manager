@@ -119,6 +119,20 @@ const taskDraftSchema = new mongoose.Schema(
     extractorProvider: {
       type: String,
       default: 'heuristic' // 'openai' | 'gemini' | 'heuristic'
+    },
+    attachments: [
+      {
+        publicId: { type: String, default: '' },
+        url: { type: String, required: true },
+        fileName: { type: String, default: '' },
+        fileType: { type: String, default: 'image/jpeg' },
+        bytes: { type: Number, default: 0 },
+        uploadedAt: { type: Date, default: Date.now }
+      }
+    ],
+    previewImage: {
+      publicId: { type: String, default: '' },
+      url: { type: String, default: '' }
     }
   },
   {

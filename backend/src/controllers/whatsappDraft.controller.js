@@ -578,6 +578,17 @@ export const whatsappDraftController = {
         source: TASK_SOURCES.WHATSAPP,
         whatsappMessageId: draft.messageId,
         whatsappDraftId: draft._id,
+        previewImage: draft.previewImage?.url ? draft.previewImage : (draft.attachments?.[0]?.url ? { publicId: draft.attachments[0].publicId || '', url: draft.attachments[0].url } : { publicId: '', url: '' }),
+        attachments: draft.attachments && draft.attachments.length > 0 ? draft.attachments.map(a => ({
+          publicId: a.publicId || '',
+          public_id: a.publicId || '',
+          url: a.url,
+          fileName: a.fileName || 'whatsapp_image.jpg',
+          fileType: a.fileType || 'image/jpeg',
+          bytes: a.bytes || 0,
+          uploadedBy: req.user._id,
+          uploadedAt: a.uploadedAt || new Date()
+        })) : [],
         groupName: draft.groupName || '',
         whatsappSender: {
           phone: draft.senderJid,

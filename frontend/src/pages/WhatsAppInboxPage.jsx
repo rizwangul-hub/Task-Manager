@@ -576,6 +576,17 @@ export const WhatsAppInboxPage = () => {
                   {draft.rawMessageText}
                 </div>
 
+                {(draft.previewImage?.url || draft.attachments?.length > 0) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem' }}>
+                    <img
+                      src={draft.previewImage?.url || draft.attachments?.[0]?.url}
+                      alt="Thumbnail"
+                      style={{ width: '44px', height: '44px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                    />
+                    <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 500 }}>📷 Image attached</span>
+                  </div>
+                )}
+
                 {/* Warning / missing info callout */}
                 {draft.aiExtraction?.missingInformation?.length > 0 && (
                   <div
@@ -685,6 +696,55 @@ export const WhatsAppInboxPage = () => {
                 {new Date(selectedDraft.messageTimestamp).toLocaleString()}
               </div>
             </div>
+
+            {/* Attached WhatsApp Image / Media Preview */}
+            {(selectedDraft.previewImage?.url || selectedDraft.attachments?.length > 0) && (
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '6px',
+                  padding: '0.75rem'
+                }}
+              >
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#475569', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span>📷 Attached Picture / Media ({selectedDraft.attachments?.length || 1})</span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  {(selectedDraft.attachments?.length > 0
+                    ? selectedDraft.attachments
+                    : [selectedDraft.previewImage]
+                  ).filter(a => a?.url).map((att, idx) => (
+                    <a
+                      key={idx}
+                      href={att.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Click to view full image in Cloudinary"
+                      style={{
+                        display: 'inline-block',
+                        borderRadius: '6px',
+                        overflow: 'hidden',
+                        border: '1px solid #cbd5e1',
+                        background: '#0f172a',
+                        textDecoration: 'none'
+                      }}
+                    >
+                      <img
+                        src={att.url}
+                        alt={att.fileName || 'WhatsApp Attachment'}
+                        style={{
+                          maxWidth: '260px',
+                          maxHeight: '180px',
+                          objectFit: 'contain',
+                          display: 'block'
+                        }}
+                      />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Missing Info Warning */}
             {selectedDraft.processingError && (
