@@ -314,27 +314,31 @@ export const createWhatsAppService = ({
     const remoteJid = msg.key?.remoteJid || '';
     const messageId = msg.key?.id || 'unknown';
     const isGroup = remoteJid.endsWith('@g.us');
+    const isDirect = remoteJid.endsWith('@s.whatsapp.net');
     const fromMe = Boolean(msg.key?.fromMe);
-    const senderJid = msg.key?.participant || msg.participant || (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid);
+    const senderJid = isGroup
+      ? (msg.key?.participant || msg.participant || (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid))
+      : (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid);
     let senderName = msg.pushName || '';
     if (!senderName) {
       if (fromMe) {
         senderName = instanceSock?.user?.name || 'Me';
       } else {
         const phone = normalizeWhatsAppPhoneNumber(senderJid);
-        senderName = phone ? ('+' + phone) : 'Group Member';
+        senderName = phone ? ('+' + phone) : (isGroup ? 'Group Member' : 'Direct Sender');
       }
     }
 
-    if (!isGroup || remoteJid === 'status@broadcast') {
-      serviceLogger.info('[WA_INBOUND_FILTER] Ignored non-group message or status broadcast.', {
+    if ((!isGroup && !isDirect) || remoteJid === 'status@broadcast') {
+      serviceLogger.info('[WA_INBOUND_FILTER] Ignored non-group and non-direct message or status broadcast.', {
         remoteJid,
-        isGroup
+        isGroup,
+        isDirect
       });
       return;
     }
 
-    serviceLogger.info('[WA_MESSAGE_RECEIVED] Inbound group message accepted for processing.', {
+    serviceLogger.info(`[WA_MESSAGE_RECEIVED] Inbound ${isGroup ? 'group' : 'direct'} message accepted for processing.`, {
       messageId,
       remoteJid,
       fromMe
@@ -403,41 +407,48 @@ export const createWhatsAppService = ({
       return;
     }
 
-    const monitored = await findMonitoredGroup(remoteJid);
-    if (!monitored) {
-      let activeMonitoredInfo = [];
-      try {
-        const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
-        const docs = await MonitoredGroup.find().lean();
-        activeMonitoredInfo = docs.map((d) => ({
-          groupJid: d.groupJid,
-          groupName: d.groupName,
-          isMonitored: d.isMonitored,
-          isPaused: d.isPaused
-        }));
-      } catch {}
-      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message: Group is not in monitored list.', {
-        incomingGroupJid: remoteJid,
-        allMonitoredGroups: activeMonitoredInfo
-      });
-      return;
-    }
-    if (monitored.isPaused) {
-      serviceLogger.info('[WA_INBOUND_FILTER] Ignored message: Monitored group is currently paused.', {
-        groupJid: remoteJid,
-        groupName: monitored.groupName
-      });
-      return;
-    }
+    let monitored = null;
+    let resolvedGroupName = '';
+    if (isGroup) {
+      monitored = await findMonitoredGroup(remoteJid);
+      if (!monitored) {
+        let activeMonitoredInfo = [];
+        try {
+          const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+          const docs = await MonitoredGroup.find().lean();
+          activeMonitoredInfo = docs.map((d) => ({
+            groupJid: d.groupJid,
+            groupName: d.groupName,
+            isMonitored: d.isMonitored,
+            isPaused: d.isPaused
+          }));
+        } catch {}
+        serviceLogger.info('[WA_INBOUND_FILTER] Ignored message: Group is not in monitored list.', {
+          incomingGroupJid: remoteJid,
+          allMonitoredGroups: activeMonitoredInfo
+        });
+        return;
+      }
+      if (monitored.isPaused) {
+        serviceLogger.info('[WA_INBOUND_FILTER] Ignored message: Monitored group is currently paused.', {
+          groupJid: remoteJid,
+          groupName: monitored.groupName
+        });
+        return;
+      }
+      resolvedGroupName = monitored.groupName || 'WhatsApp Group';
 
-    if (inboundDependencies.updateGroupLastMessageAt) {
-      await inboundDependencies.updateGroupLastMessageAt(remoteJid, messageTimestamp);
+      if (inboundDependencies.updateGroupLastMessageAt) {
+        await inboundDependencies.updateGroupLastMessageAt(remoteJid, messageTimestamp);
+      } else {
+        const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+        await MonitoredGroup.updateOne(
+          { groupJid: remoteJid },
+          { $set: { lastMessageAt: messageTimestamp } }
+        );
+      }
     } else {
-      const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
-      await MonitoredGroup.updateOne(
-        { groupJid: remoteJid },
-        { $set: { lastMessageAt: messageTimestamp } }
-      );
+      resolvedGroupName = `Direct (${senderName || 'Private'})`;
     }
 
     const messageKey = `${remoteJid}:${messageId}`;
@@ -565,7 +576,7 @@ export const createWhatsAppService = ({
         let draft;
         const draftData = {
           groupJid: remoteJid,
-          groupName: monitored.groupName || '',
+          groupName: resolvedGroupName,
           messageId,
           senderJid,
           senderName,
@@ -661,7 +672,7 @@ export const createWhatsAppService = ({
               const actionUrl = `${env.FRONTEND_URL || 'http://localhost:5173'}/whatsapp-inbox`;
               const template = emailService.templates.whatsappDraftReceived({
                 draftTitle: extraction?.title || 'New WhatsApp Task Draft',
-                groupName: monitored.groupName || remoteJid,
+                groupName: resolvedGroupName || remoteJid,
                 senderName,
                 senderPhone: senderJid,
                 priority: extraction?.priority || 'Medium',
@@ -695,7 +706,7 @@ export const createWhatsAppService = ({
         try {
           const failedData = {
             groupJid: remoteJid,
-            groupName: monitored.groupName || '',
+            groupName: resolvedGroupName || '',
             messageId,
             senderJid,
             senderName,
@@ -797,9 +808,18 @@ export const createWhatsAppService = ({
     }
 
     const backupPath = `${authPath}.backup-${Date.now()}-${randomUUID()}`;
-    await fileSystem.rename(authPath, backupPath);
-    await fileSystem.mkdir(authPath, { recursive: true, mode: 0o700 });
-    return basename(backupPath);
+    try {
+      await fileSystem.rename(authPath, backupPath);
+      await fileSystem.mkdir(authPath, { recursive: true, mode: 0o700 });
+      return basename(backupPath);
+    } catch (renameErr) {
+      serviceLogger.warn(`[WA] Direct rename failed (${redactError(renameErr?.message)}), falling back to directory copy.`);
+      const { cp, rm } = await import('node:fs/promises');
+      await cp(authPath, backupPath, { recursive: true });
+      await rm(authPath, { recursive: true, force: true });
+      await fileSystem.mkdir(authPath, { recursive: true, mode: 0o700 });
+      return basename(backupPath);
+    }
   };
 
   const reconnect = async ({ confirmRePair = false, forceRePair = false } = {}) => {
@@ -984,10 +1004,12 @@ export const createWhatsAppService = ({
           printQRInTerminal: false,
           markOnlineOnConnect: true,
           syncFullHistory: false,
+          shouldSyncHistoryMessage: () => false,
+          fireInitQueries: false,
           browser: Browsers.ubuntu('Chrome'),
           msgRetryCounterCache,
           retryRequestDelayMs: 500,
-          shouldIgnoreJid: (jid) => !jid || isJidBroadcast(jid) || (isJidNewsletter ? isJidNewsletter(jid) : String(jid).endsWith('@newsletter')),
+          shouldIgnoreJid: (jid) => !jid || isJidBroadcast(jid) || (isJidNewsletter ? isJidNewsletter(jid) : String(jid).endsWith('@newsletter')) || String(jid).endsWith('@call') || String(jid).endsWith('@bot'),
           keepAliveIntervalMs: 25_000,
           defaultQueryTimeoutMs: 90_000,
           connectTimeoutMs: 60_000,

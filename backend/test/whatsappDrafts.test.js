@@ -975,3 +975,75 @@ test('29. Inbound WhatsApp message with image attachment uploads to Cloudinary a
   assert.equal(drafts[0].previewImage?.url, 'https://res.cloudinary.com/demo/image/upload/sample.jpg');
   await service.close();
 });
+
+test('30. Inbound direct 1-on-1 message from boss (@s.whatsapp.net) creates an awaiting_review draft', async () => {
+  const drafts = [];
+  let socketHandler;
+  const service = createWhatsAppService({
+    authInfoPath: 'backend/test-auth-direct-msg',
+    authStateFactory: async () => ({
+      state: { creds: {}, keys: {} },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => ({
+      ws: { readyState: 1 },
+      user: { id: '923255984244:7@s.whatsapp.net', name: 'Rizwan' },
+      ev: {
+        on(evt, handler) {
+          if (evt === 'messages.upsert') socketHandler = handler;
+        },
+        removeAllListeners() {}
+      },
+      emit(evt, payload) {
+        if (evt === 'messages.upsert') socketHandler?.(payload);
+      },
+      end() {}
+    }),
+    fileSystem: {
+      mkdir: async () => {},
+      readdir: async () => ['creds.json'],
+      rename: async () => {},
+      stat: async () => ({})
+    },
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findDraft: async () => null,
+      createDraft: async (data) => {
+        drafts.push(data);
+        return data;
+      },
+      extractTask: async () => ({
+        extraction: { isTask: true, title: 'Submit client report', confidence: 0.95 },
+        provider: 'gemini'
+      }),
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+
+  const directBossMessage = {
+    key: { id: 'boss-dm-101', remoteJid: '923001234567@s.whatsapp.net', fromMe: false },
+    pushName: 'Boss / Client',
+    messageTimestamp: Math.floor(new Date('2026-10-16T03:40:00.000Z').getTime() / 1000),
+    message: {
+      conversation: 'Please submit the client performance report by Sunday evening'
+    }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [directBossMessage]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].status, 'awaiting_review');
+  assert.equal(drafts[0].groupJid, '923001234567@s.whatsapp.net');
+  assert.equal(drafts[0].groupName, 'Direct (Boss / Client)');
+  assert.equal(drafts[0].senderName, 'Boss / Client');
+  assert.equal(drafts[0].aiExtraction.title, 'Submit client report');
+  await service.close();
+});

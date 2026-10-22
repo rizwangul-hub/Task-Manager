@@ -28,7 +28,8 @@ import {
   FlaskConical,
   CheckCircle2,
   AlertCircle,
-  RotateCcw
+  RotateCcw,
+  QrCode
 } from 'lucide-react';
 
 export const SettingsPage = () => {
@@ -319,6 +320,27 @@ export const SettingsPage = () => {
     }
   };
 
+  const handleForceRePairWhatsApp = async () => {
+    const confirmed = window.confirm(
+      'Force WhatsApp Re-Pairing?\n\nThis will safely back up your current WhatsApp session and generate a fresh QR code so you can link your phone again. Use this whenever messages are not decrypting or creating tasks.'
+    );
+    if (!confirmed) return;
+
+    setReconnectingWhatsApp(true);
+    try {
+      const response = await whatsappService.reconnect(true);
+      const backupNotice = response.data?.backupName
+        ? ` Previous session preserved as ${response.data.backupName}.`
+        : '';
+      toast.success(`Fresh pairing QR generated!${backupNotice} Please scan the QR code below.`);
+      await fetchWhatsAppDiagnostics();
+    } catch (error) {
+      toast.error(error.message || 'Could not reset WhatsApp session.');
+    } finally {
+      setReconnectingWhatsApp(false);
+    }
+  };
+
   const handleOpenHistoryReset = async () => {
     setLoadingHistoryResetPreview(true);
     try {
@@ -434,6 +456,17 @@ export const SettingsPage = () => {
                 onClick={handleReconnectWhatsApp}
               >
                 Reconnect WhatsApp
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                icon={QrCode}
+                isLoading={reconnectingWhatsApp}
+                onClick={handleForceRePairWhatsApp}
+                title="Backs up the current session and generates a fresh QR code to scan"
+              >
+                Scan New QR / Re-Pair
               </Button>
             </div>
           </div>
