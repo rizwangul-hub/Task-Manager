@@ -819,3 +819,68 @@ test('27. Both manager (fromMe: true) and boss/team messages with actionable tas
     process.env.WHATSAPP_ALLOW_FROM_ME = previousEnv;
   }
 });
+
+test('28. messages.update event with decrypted message content creates an awaiting_review draft', async () => {
+  let updateHandler;
+  const drafts = [];
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => {
+      const sock = {
+        user: { id: 'me@s.whatsapp.net', name: 'Rizwan' },
+        ws: { readyState: 1 },
+        ev: {
+          on(evt, handler) {
+            if (evt === 'messages.update') updateHandler = handler;
+          },
+          removeAllListeners() {}
+        },
+        emit(evt, payload) {
+          if (evt === 'messages.update') updateHandler?.(payload);
+        },
+        end() {}
+      };
+      return sock;
+    },
+    reconnectDelaysMs: [60_000],
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findMonitoredGroup: async () => ({ groupName: 'Task', isPaused: false }),
+      updateGroupLastMessageAt: async () => {},
+      findDraft: async () => null,
+      createDraft: async (draftData) => {
+        const draft = { ...draftData, save: async () => {} };
+        drafts.push(draft);
+        return draft;
+      },
+      extractTask: async () => ({
+        extraction: { isTask: true, title: 'Updated decrypted task', confidence: 0.95 },
+        provider: 'gemini'
+      }),
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+  socket.emit('messages.update', [
+    {
+      key: { id: 'msg-update-boss', remoteJid: '120363049482690322@g.us', fromMe: false, participant: 'boss@s.whatsapp.net' },
+      update: {
+        message: { conversation: 'Please prepare the client demo presentation by 4pm' },
+        messageTimestamp: Math.floor(new Date('2026-10-16T03:37:00.000Z').getTime() / 1000),
+        pushName: 'Boss'
+      }
+    }
+  ]);
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].senderName, 'Boss');
+  assert.equal(drafts[0].status, 'awaiting_review');
+  await service.close();
+});
