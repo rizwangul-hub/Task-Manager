@@ -943,7 +943,7 @@ test('29. Inbound WhatsApp message with image attachment uploads to Cloudinary a
       }),
       broadcastDraft: async () => {}
     },
-    serviceLogger: { info() {}, warn() {}, error() {} }
+    serviceLogger: { info() {}, warn() {}, error(msg, meta) { console.log('ERROR_LOG:', msg, meta); } }
   });
 
   await service.initialize();
@@ -1018,7 +1018,7 @@ test('30. Inbound direct 1-on-1 message from boss (@s.whatsapp.net) creates an a
       }),
       broadcastDraft: async () => {}
     },
-    serviceLogger: { info() {}, warn() {}, error() {} }
+    serviceLogger: { info() {}, warn() {}, error(msg, meta) { console.log('ERROR_LOG:', msg, meta); } }
   });
 
   await service.initialize();
@@ -1045,5 +1045,105 @@ test('30. Inbound direct 1-on-1 message from boss (@s.whatsapp.net) creates an a
   assert.equal(drafts[0].groupName, 'Direct (Boss / Client)');
   assert.equal(drafts[0].senderName, 'Boss / Client');
   assert.equal(drafts[0].aiExtraction.title, 'Submit client report');
+  await service.close();
+});
+
+test('31. Inbound WhatsApp voice message (audioMessage) downloads audio, extracts task with Gemini multimodal audio, and saves voice note draft with audio attachment', async () => {
+  const drafts = [];
+  let socketHandler;
+  const service = createWhatsAppService({
+    authInfoPath: 'backend/test-auth-voice-msg',
+    authStateFactory: async () => ({
+      state: { creds: {}, keys: {} },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => ({
+      ws: { readyState: 1 },
+      user: { id: '923255984244:7@s.whatsapp.net', name: 'Rizwan' },
+      ev: {
+        on(evt, handler) {
+          if (evt === 'messages.upsert') socketHandler = handler;
+        },
+        removeAllListeners() {}
+      },
+      emit(evt, payload) {
+        if (evt === 'messages.upsert') socketHandler?.(payload);
+      },
+      end() {}
+    }),
+    fileSystem: {
+      mkdir: async () => {},
+      readdir: async () => ['creds.json'],
+      rename: async () => {},
+      stat: async () => ({})
+    },
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findDraft: async () => null,
+      findMonitoredGroup: async () => ({ groupName: 'Task', isPaused: false }),
+      updateGroupLastMessageAt: async () => {},
+      downloadMedia: async () => Buffer.from('fake-audio-bytes-ogg-opus'),
+      uploadMedia: async (msg, buf) => ({
+        attachments: [
+          {
+            publicId: 'wa_voice_101',
+            url: 'https://res.cloudinary.com/demo/video/upload/wa_voice_101.ogg',
+            fileName: 'wa_voice_101.ogg',
+            fileType: 'audio/ogg',
+            bytes: buf.length,
+            uploadedAt: new Date()
+          }
+        ],
+        previewImage: { publicId: '', url: '' }
+      }),
+      createDraft: async (data) => {
+        drafts.push(data);
+        return data;
+      },
+      extractTask: async (text, ctx) => {
+        assert.ok(ctx.audio?.buffer, 'Audio buffer must be provided to multimodal extractor');
+        return {
+          extraction: {
+            isTask: true,
+            title: 'Prepare quarterly sales report',
+            description: 'Voice note transcription: "Rizwan please prepare the quarterly sales report by Monday morning"',
+            confidence: 0.95
+          },
+          provider: 'gemini'
+        };
+      },
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error(msg, meta) { console.log('ERROR_LOG:', msg, meta); } }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+
+  const voiceMessage = {
+    key: { id: 'voice-msg-101', remoteJid: '120363049482690322@g.us', fromMe: false, participant: 'boss@s.whatsapp.net' },
+    pushName: 'Boss',
+    messageTimestamp: Math.floor(new Date('2026-10-16T03:45:00.000Z').getTime() / 1000),
+    message: {
+      audioMessage: {
+        mimetype: 'audio/ogg; codecs=opus',
+        ptt: true,
+        seconds: 8
+      }
+    }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [voiceMessage]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].status, 'awaiting_review');
+  assert.equal(drafts[0].aiExtraction.title, 'Prepare quarterly sales report');
+  assert.equal(drafts[0].attachments?.length, 1);
+  assert.equal(drafts[0].attachments[0].fileType, 'audio/ogg');
+  assert.equal(drafts[0].attachments[0].url, 'https://res.cloudinary.com/demo/video/upload/wa_voice_101.ogg');
   await service.close();
 });

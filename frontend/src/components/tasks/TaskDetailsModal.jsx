@@ -598,6 +598,18 @@ export const TaskDetailsModal = ({
                         </a>
                       </div>
                     )}
+                    {task.attachments?.some(a => a.fileType?.startsWith('audio/') || a.fileName?.includes('voice')) && (
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <strong style={{ fontSize: '0.75rem', color: '#166534', display: 'block', marginBottom: '0.35rem' }}>
+                          🎙️ WhatsApp Voice Note Recording:
+                        </strong>
+                        <audio
+                          controls
+                          src={task.attachments.find(a => a.fileType?.startsWith('audio/') || a.fileName?.includes('voice'))?.url}
+                          style={{ width: '100%', height: '36px' }}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

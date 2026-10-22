@@ -576,16 +576,28 @@ export const WhatsAppInboxPage = () => {
                   {draft.rawMessageText}
                 </div>
 
-                {(draft.previewImage?.url || draft.attachments?.length > 0) && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem' }}>
-                    <img
-                      src={draft.previewImage?.url || draft.attachments?.[0]?.url}
-                      alt="Thumbnail"
-                      style={{ width: '44px', height: '44px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #cbd5e1' }}
-                    />
-                    <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 500 }}>📷 Image attached</span>
-                  </div>
-                )}
+                {(draft.previewImage?.url || draft.attachments?.length > 0) && (() => {
+                  const hasAudio = draft.attachments?.some(a => a?.fileType?.startsWith('audio/') || a?.fileName?.includes('voice'));
+                  const imgUrl = draft.previewImage?.url || (!hasAudio ? draft.attachments?.[0]?.url : null);
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem' }}>
+                      {hasAudio ? (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', color: '#047857', fontWeight: 600 }}>
+                          <span>🎙️ Voice Note</span>
+                        </div>
+                      ) : imgUrl ? (
+                        <>
+                          <img
+                            src={imgUrl}
+                            alt="Thumbnail"
+                            style={{ width: '44px', height: '44px', objectFit: 'cover', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                          />
+                          <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 500 }}>📷 Image attached</span>
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })()}
 
                 {/* Warning / missing info callout */}
                 {draft.aiExtraction?.missingInformation?.length > 0 && (
@@ -710,38 +722,51 @@ export const WhatsAppInboxPage = () => {
                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#475569', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                   <span>📷 Attached Picture / Media ({selectedDraft.attachments?.length || 1})</span>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                   {(selectedDraft.attachments?.length > 0
                     ? selectedDraft.attachments
                     : [selectedDraft.previewImage]
-                  ).filter(a => a?.url).map((att, idx) => (
-                    <a
-                      key={idx}
-                      href={att.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Click to view full image in Cloudinary"
-                      style={{
-                        display: 'inline-block',
-                        borderRadius: '6px',
-                        overflow: 'hidden',
-                        border: '1px solid #cbd5e1',
-                        background: '#0f172a',
-                        textDecoration: 'none'
-                      }}
-                    >
-                      <img
-                        src={att.url}
-                        alt={att.fileName || 'WhatsApp Attachment'}
+                  ).filter(a => a?.url).map((att, idx) => {
+                    const isAudio = att.fileType?.startsWith('audio/') || att.fileName?.includes('voice');
+                    if (isAudio) {
+                      return (
+                        <div key={idx} style={{ width: '100%', padding: '0.5rem', background: '#f1f5f9', borderRadius: '6px' }}>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#334155', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span>🎙️ Voice Note Audio Player:</span>
+                          </div>
+                          <audio controls src={att.url} style={{ width: '100%', height: '36px' }} />
+                        </div>
+                      );
+                    }
+                    return (
+                      <a
+                        key={idx}
+                        href={att.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Click to view full image in Cloudinary"
                         style={{
-                          maxWidth: '260px',
-                          maxHeight: '180px',
-                          objectFit: 'contain',
-                          display: 'block'
+                          display: 'inline-block',
+                          borderRadius: '6px',
+                          overflow: 'hidden',
+                          border: '1px solid #cbd5e1',
+                          background: '#0f172a',
+                          textDecoration: 'none'
                         }}
-                      />
-                    </a>
-                  ))}
+                      >
+                        <img
+                          src={att.url}
+                          alt={att.fileName || 'WhatsApp Attachment'}
+                          style={{
+                            maxWidth: '260px',
+                            maxHeight: '180px',
+                            objectFit: 'contain',
+                            display: 'block'
+                          }}
+                        />
+                      </a>
+                    );
+                  })}
                 </div>
               </div>
             )}

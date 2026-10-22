@@ -387,12 +387,16 @@ export const createWhatsAppService = ({
 
     const imageMsg = innerMsg?.imageMessage;
     const documentMsg = innerMsg?.documentMessage;
+    const audioMsg = innerMsg?.audioMessage;
     const hasImage = Boolean(imageMsg);
     const hasDocument = Boolean(documentMsg);
+    const hasAudio = Boolean(audioMsg);
 
-    if (!messageText && (hasImage || hasDocument)) {
+    if (!messageText && (hasImage || hasDocument || hasAudio)) {
       messageText = hasImage
         ? (imageMsg?.caption?.trim() || `[Photo from ${senderName}]`)
+        : hasAudio
+        ? `[Voice Note from ${senderName}]`
         : (documentMsg?.caption?.trim() || `[File: ${documentMsg?.fileName || 'Attachment'}]`);
     }
 
@@ -475,44 +479,18 @@ export const createWhatsAppService = ({
       try {
         serviceLogger.info('[WA_EXTRACT_START] Starting task extraction.', { characterCount: messageText.length });
 
-        let extraction;
-        let provider;
-        let fallbackReason;
-        if (inboundDependencies.extractTask) {
-          ({ extraction, provider, fallbackReason } = await inboundDependencies.extractTask(messageText, {
-            senderName,
-            messageTimestamp
-          }));
-        } else {
-          const { extractTaskFromWhatsAppMessage } = await import('./aiTaskExtraction.service.js');
-          ({ extraction, provider, fallbackReason } = await extractTaskFromWhatsAppMessage(messageText, {
-            senderName,
-            messageTimestamp
-          }));
-        }
-
-        let newStatus = 'awaiting_review';
-        if (!extraction.isTask) {
-          newStatus = 'ignored';
-        } else if (extraction.missingInformation?.length > 0 || extraction.confidence < 0.6) {
-          newStatus = 'needs_clarification';
-        }
-
-        // Download and upload WhatsApp media if present
+        // Download attached WhatsApp media if present (images, documents, or voice notes)
+        let mediaBuffer = null;
         let attachments = [];
         let previewImage = { publicId: '', url: '', bytes: 0 };
 
-        if (hasImage || hasDocument) {
-          if (inboundDependencies.uploadMedia) {
-            const mediaResult = await inboundDependencies.uploadMedia(msg);
-            if (mediaResult) {
-              attachments = mediaResult.attachments || [];
-              previewImage = mediaResult.previewImage || { publicId: '', url: '' };
-            }
-          } else {
+        if (hasImage || hasDocument || hasAudio) {
+          if (inboundDependencies.downloadMedia) {
+            mediaBuffer = await inboundDependencies.downloadMedia(msg);
+          } else if (!inboundDependencies.uploadMedia) {
             try {
-              serviceLogger.info('[WA_MEDIA] Downloading attached WhatsApp media...', { messageId });
-              const buffer = await downloadMediaMessage(
+              serviceLogger.info('[WA_MEDIA] Downloading attached WhatsApp media...', { messageId, hasAudio, hasImage });
+              mediaBuffer = await downloadMediaMessage(
                 msg,
                 'buffer',
                 {},
@@ -521,56 +499,106 @@ export const createWhatsAppService = ({
                   reuploadRequest: (msgToReupload) => instanceSock?.updateMediaMessage(msgToReupload)
                 }
               );
-
-              if (buffer && buffer.length > 0) {
-                const { default: cloudinaryService } = await import('./cloudinary.service.js');
-                if (cloudinaryService.isReady()) {
-                  serviceLogger.info('[WA_MEDIA] Uploading media to Cloudinary...', { bytes: buffer.length });
-                  const mimeType = hasImage
-                    ? (imageMsg?.mimetype || 'image/jpeg')
-                    : (documentMsg?.mimetype || 'application/octet-stream');
-                  const fileName = hasImage
-                    ? `wa_img_${messageId}.jpg`
-                    : (documentMsg?.fileName || `wa_file_${messageId}`);
-
-                  const uploadResult = await cloudinaryService.uploadBuffer(buffer, {
-                    folder: 'whatsapp_task_attachments',
-                    resource_type: 'auto'
-                  });
-
-                  if (uploadResult?.url) {
-                    serviceLogger.info('[WA_MEDIA_SUCCESS] Uploaded WhatsApp media to Cloudinary', {
-                      url: uploadResult.url,
-                      publicId: uploadResult.publicId
-                    });
-
-                    const att = {
-                      publicId: uploadResult.publicId,
-                      url: uploadResult.url,
-                      fileName: fileName,
-                      fileType: mimeType,
-                      bytes: uploadResult.bytes || buffer.length,
-                      uploadedAt: new Date()
-                    };
-                    attachments.push(att);
-                    if (hasImage) {
-                      previewImage = {
-                        publicId: uploadResult.publicId,
-                        url: uploadResult.url
-                      };
-                    }
-                  }
-                } else {
-                  serviceLogger.warn('[WA_MEDIA] Cloudinary not configured; attachment skipped upload.');
-                }
-              }
             } catch (mediaError) {
-              serviceLogger.error('[WA_MEDIA_ERROR] Failed to download or upload WhatsApp attachment:', {
+              serviceLogger.error('[WA_MEDIA_ERROR] Failed to download attached media:', {
                 messageId,
                 error: redactError(mediaError?.message || '')
               });
             }
           }
+
+          if (inboundDependencies.uploadMedia) {
+            const mediaResult = await inboundDependencies.uploadMedia(msg, mediaBuffer);
+            if (mediaResult) {
+              attachments = mediaResult.attachments || [];
+              previewImage = mediaResult.previewImage || { publicId: '', url: '' };
+            }
+          } else if (mediaBuffer && mediaBuffer.length > 0) {
+            try {
+              const { default: cloudinaryService } = await import('./cloudinary.service.js');
+              if (cloudinaryService.isReady()) {
+                serviceLogger.info('[WA_MEDIA] Uploading media to Cloudinary...', { bytes: mediaBuffer.length, hasAudio, hasImage });
+                const mimeType = hasImage
+                  ? (imageMsg?.mimetype || 'image/jpeg')
+                  : hasAudio
+                  ? (audioMsg?.mimetype || 'audio/ogg')
+                  : (documentMsg?.mimetype || 'application/octet-stream');
+                const fileName = hasImage
+                  ? `wa_img_${messageId}.jpg`
+                  : hasAudio
+                  ? `wa_voice_${messageId}.ogg`
+                  : (documentMsg?.fileName || `wa_file_${messageId}`);
+
+                const uploadResult = await cloudinaryService.uploadBuffer(mediaBuffer, {
+                  folder: 'whatsapp_task_attachments',
+                  resource_type: 'auto'
+                });
+
+                if (uploadResult?.url) {
+                  serviceLogger.info('[WA_MEDIA_SUCCESS] Uploaded WhatsApp media to Cloudinary', {
+                    url: uploadResult.url,
+                    publicId: uploadResult.publicId
+                  });
+
+                  attachments.push({
+                    publicId: uploadResult.publicId,
+                    url: uploadResult.url,
+                    fileName,
+                    fileType: mimeType,
+                    bytes: uploadResult.bytes || mediaBuffer.length,
+                    uploadedAt: new Date()
+                  });
+
+                  if (hasImage) {
+                    previewImage = {
+                      publicId: uploadResult.publicId,
+                      url: uploadResult.url
+                    };
+                  }
+                }
+              } else {
+                serviceLogger.warn('[WA_MEDIA] Cloudinary not configured; attachment skipped upload.');
+              }
+            } catch (uploadErr) {
+              serviceLogger.error('[WA_MEDIA_ERROR] Failed to upload media to Cloudinary:', {
+                error: redactError(uploadErr?.message || '')
+              });
+            }
+          }
+        }
+
+        const audioContext = hasAudio && mediaBuffer && mediaBuffer.length > 0 ? {
+          buffer: mediaBuffer,
+          mimeType: audioMsg?.mimetype || 'audio/ogg'
+        } : null;
+
+        let extraction;
+        let provider;
+        let fallbackReason;
+        if (inboundDependencies.extractTask) {
+          ({ extraction, provider, fallbackReason } = await inboundDependencies.extractTask(messageText, {
+            senderName,
+            messageTimestamp,
+            audio: audioContext
+          }));
+        } else {
+          const { extractTaskFromWhatsAppMessage } = await import('./aiTaskExtraction.service.js');
+          ({ extraction, provider, fallbackReason } = await extractTaskFromWhatsAppMessage(messageText, {
+            senderName,
+            messageTimestamp,
+            audio: audioContext
+          }));
+        }
+
+        if (hasAudio && extraction?.title && messageText.startsWith('[Voice Note')) {
+          messageText = `🎙️ Voice Note: ${extraction.title}${extraction.description ? ` — "${extraction.description}"` : ''}`;
+        }
+
+        let newStatus = 'awaiting_review';
+        if (!extraction.isTask) {
+          newStatus = 'ignored';
+        } else if (extraction.missingInformation?.length > 0 || extraction.confidence < 0.6) {
+          newStatus = 'needs_clarification';
         }
 
         let draft;

@@ -166,8 +166,27 @@ export function parseRelativeDate(text, referenceDate = new Date()) {
 /**
  * Heuristic Extractor: Rule-based task detector when AI credentials are absent
  */
-export function extractTaskHeuristic(text, { senderName = '', messageTimestamp = new Date(), projects = [] } = {}) {
+export function extractTaskHeuristic(text, { senderName = '', messageTimestamp = new Date(), projects = [], audio = null } = {}) {
   const trimmed = text.trim();
+  if (audio?.buffer) {
+    return {
+      isTask: true,
+      confidence: 0.85,
+      title: `Review voice note from ${senderName || 'Sender'}`,
+      description: `Voice message received (${Math.round(audio.buffer.length / 1024)} KB). Audio recording is attached to this draft for playback.`,
+      assigneeName: '',
+      assigneePhone: '',
+      projectName: '',
+      projectId: null,
+      priority: 'Medium',
+      startDate: null,
+      dueDate: null,
+      dateInterpretation: '',
+      sourceSender: senderName,
+      reason: 'Voice note received from team member/client. Attached for audio review.',
+      missingInformation: ['Listen to audio recording to confirm task specifics']
+    };
+  }
   if (!trimmed) {
     return {
       isTask: false,
@@ -328,8 +347,9 @@ export async function callGemini(apiKey, text, context, options = {}) {
     ? [primaryModel]
     : [...new Set([primaryModel, 'gemini-1.5-flash', 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest'])].filter(Boolean);
 
+  const isVoice = Boolean(context.audio?.buffer);
   const prompt = `You are an AI assistant in a task management system.
-Analyze the following WhatsApp message received in a team group.
+${isVoice ? 'The user sent a WhatsApp voice message / audio note. Listen carefully to the voice note (it may be spoken in English, Urdu, Hindi, or conversational mix).' : 'Analyze the following WhatsApp message received in a team group or direct chat.'}
 Decide if the message is an actionable work task or instruction.
 If it is casual chit-chat, a greeting, joke, or announcement with no actionable task, return isTask: false.
 
@@ -337,14 +357,13 @@ Reference message timestamp: ${context.messageTimestamp.toISOString()}
 Sender: ${context.senderName || 'Unknown'}
 Available workspace projects: ${JSON.stringify(context.projects.map((p) => ({ id: p._id, title: p.title })))}
 
-Input WhatsApp Message:
-"""${text}"""
+${isVoice ? 'Listen to the audio content provided in the attachment.' : `Input WhatsApp Message:\n"""${text}"""`}
 
 Return ONLY a valid JSON object matching this schema:
 {
   "isTask": boolean,
   "title": string (concise actionable title, max 100 chars),
-  "description": string (clear instructions based strictly on message content),
+  "description": string (clear instructions${isVoice ? ' including complete speech transcription' : ' based strictly on message content'}),
   "assigneeName": string or null (name of the person asked to do the task, only if clearly stated in the message),
   "assigneePhone": string or null (never invent, leave null if not provided),
   "priority": "Low" | "Medium" | "High" | "Urgent",
@@ -373,6 +392,19 @@ Return ONLY a valid JSON object matching this schema:
           attempt: attempt + 1
         });
 
+        const parts = [];
+        if (context.audio?.buffer) {
+          const rawMime = context.audio.mimeType || 'audio/ogg';
+          const cleanMime = rawMime.split(';')[0].trim();
+          parts.push({
+            inlineData: {
+              mimeType: cleanMime,
+              data: context.audio.buffer.toString('base64')
+            }
+          });
+        }
+        parts.push({ text: prompt });
+
         const response = await fetch(url, {
           method: 'POST',
           headers: {
@@ -380,7 +412,7 @@ Return ONLY a valid JSON object matching this schema:
             'x-goog-api-key': apiKey
           },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
+            contents: [{ parts }],
             generationConfig: {
               responseMimeType: 'application/json',
               temperature: 0.1
@@ -613,7 +645,8 @@ export async function extractTaskFromWhatsAppMessage(
   {
     senderName = '',
     messageTimestamp = new Date(),
-    providedProjects = null
+    providedProjects = null,
+    audio = null
   } = {}
 ) {
   const text = String(rawText || '').trim();
@@ -635,7 +668,8 @@ export async function extractTaskFromWhatsAppMessage(
   const context = {
     senderName,
     messageTimestamp: messageTimestamp instanceof Date ? messageTimestamp : new Date(messageTimestamp),
-    projects: projects || []
+    projects: projects || [],
+    audio
   };
 
   const openAiKey = process.env.OPENAI_API_KEY;
