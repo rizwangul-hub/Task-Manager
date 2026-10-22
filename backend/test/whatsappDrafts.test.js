@@ -1147,3 +1147,90 @@ test('31. Inbound WhatsApp voice message (audioMessage) downloads audio, extract
   assert.equal(drafts[0].attachments[0].url, 'https://res.cloudinary.com/demo/video/upload/wa_voice_101.ogg');
   await service.close();
 });
+
+test('32. Inbound messages from boss with protobuf Long timestamp object and @lid direct chat create awaiting_review drafts', async () => {
+  const drafts = [];
+  let socketHandler;
+  const service = createWhatsAppService({
+    authInfoPath: 'backend/test-auth-protobuf-long',
+    authStateFactory: async () => ({
+      state: { creds: {}, keys: {} },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => ({
+      ws: { readyState: 1 },
+      user: { id: '923255984244:7@s.whatsapp.net', name: 'Rizwan' },
+      ev: {
+        on(evt, handler) {
+          if (evt === 'messages.upsert') socketHandler = handler;
+        },
+        removeAllListeners() {}
+      },
+      emit(evt, payload) {
+        if (evt === 'messages.upsert') socketHandler?.(payload);
+      },
+      end() {}
+    }),
+    fileSystem: {
+      mkdir: async () => {},
+      readdir: async () => ['creds.json'],
+      rename: async () => {},
+      stat: async () => ({})
+    },
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findDraft: async () => null,
+      findMonitoredGroup: async () => ({ groupName: 'Task', isPaused: false }),
+      updateGroupLastMessageAt: async () => {},
+      createDraft: async (data) => {
+        drafts.push(data);
+        return data;
+      },
+      extractTask: async (text) => ({
+        extraction: { isTask: true, title: 'Task from boss with Long timestamp', confidence: 0.95 },
+        provider: 'gemini'
+      }),
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error(msg, meta) { console.log('ERROR_LOG:', msg, meta); } }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+
+  // Test 1: Direct 1-on-1 message from boss using @lid and protobuf Long timestamp object
+  const directBossMsgLid = {
+    key: { id: 'boss-dm-lid-101', remoteJid: '7890391822405@lid', fromMe: false },
+    pushName: 'Boss Direct',
+    // Protobuf Long object simulation:
+    messageTimestamp: { low: Math.floor(new Date('2026-10-16T03:50:00.000Z').getTime() / 1000), high: 0, unsigned: true },
+    message: {
+      conversation: 'Urgent: please deploy the new release by 5pm today'
+    }
+  };
+
+  // Test 2: Inbound group message from boss with protobuf Long timestamp object
+  const groupBossMsgLong = {
+    key: { id: 'boss-grp-long-102', remoteJid: '120363049482690322@g.us', fromMe: false, participant: '923001234567@s.whatsapp.net' },
+    pushName: 'Boss In Group',
+    messageTimestamp: { low: Math.floor(new Date('2026-10-16T03:51:00.000Z').getTime() / 1000), high: 0, unsigned: true },
+    message: {
+      conversation: 'Team, update client invoice records immediately'
+    }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [directBossMsgLid, groupBossMsgLong]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 2, 'Both direct @lid and group messages from boss must produce task drafts');
+  assert.equal(drafts[0].senderName, 'Boss Direct');
+  assert.equal(drafts[0].groupName, 'Direct (Boss Direct)');
+  assert.equal(drafts[0].status, 'awaiting_review');
+  assert.equal(drafts[1].senderName, 'Boss In Group');
+  assert.equal(drafts[1].groupName, 'Task');
+  assert.equal(drafts[1].status, 'awaiting_review');
+  await service.close();
+});

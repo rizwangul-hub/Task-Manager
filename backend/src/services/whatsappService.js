@@ -178,17 +178,36 @@ export function extractFullMessageText(msg) {
 }
 
 export const getWhatsAppMessageTimestamp = (msg) => {
-  const timestamp = Number(msg?.messageTimestamp);
-  return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp * 1000) : null;
+  let ts = msg?.messageTimestamp;
+  if (!ts) return new Date();
+  if (typeof ts === 'object') {
+    if (typeof ts.low === 'number') {
+      ts = ts.low;
+    } else if (typeof ts.toNumber === 'function') {
+      ts = ts.toNumber();
+    } else if (typeof ts.toString === 'function') {
+      ts = ts.toString();
+    }
+  }
+  if (typeof ts === 'bigint') {
+    ts = Number(ts);
+  }
+  const timestamp = Number(ts);
+  return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp * 1000) : new Date();
 };
 
-export const isAfterWhatsAppProcessingCheckpoint = (messageTimestamp, checkpoint) => {
+export const isAfterWhatsAppProcessingCheckpoint = (messageTimestamp, checkpoint, allowGraceSeconds = 300) => {
   if (!checkpoint) return true;
   const messageDate = new Date(messageTimestamp);
   const checkpointDate = new Date(checkpoint);
-  return Number.isFinite(messageDate.getTime()) &&
-    Number.isFinite(checkpointDate.getTime()) &&
-    messageDate > checkpointDate;
+  if (!Number.isFinite(messageDate.getTime()) || !Number.isFinite(checkpointDate.getTime())) {
+    return true;
+  }
+  // If message arrived recently (within the last 15 minutes of server time), never drop as historical
+  if (Date.now() - messageDate.getTime() < 15 * 60 * 1000) {
+    return true;
+  }
+  return (messageDate.getTime() + (allowGraceSeconds * 1000)) >= checkpointDate.getTime();
 };
 
 let defaultWhatsAppService = null;
@@ -314,7 +333,7 @@ export const createWhatsAppService = ({
     const remoteJid = msg.key?.remoteJid || '';
     const messageId = msg.key?.id || 'unknown';
     const isGroup = remoteJid.endsWith('@g.us');
-    const isDirect = remoteJid.endsWith('@s.whatsapp.net');
+    const isDirect = remoteJid.endsWith('@s.whatsapp.net') || remoteJid.endsWith('@lid');
     const fromMe = Boolean(msg.key?.fromMe);
     const senderJid = isGroup
       ? (msg.key?.participant || msg.participant || (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid))
@@ -415,6 +434,40 @@ export const createWhatsAppService = ({
     let resolvedGroupName = '';
     if (isGroup) {
       monitored = await findMonitoredGroup(remoteJid);
+      if (!monitored && !inboundDependencies.findMonitoredGroup && process.env.WHATSAPP_AUTO_MONITOR_GROUPS !== 'false') {
+        try {
+          const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+          const existingGroup = await MonitoredGroup.findOne({ groupJid: remoteJid });
+          if (!existingGroup) {
+            let fetchedSubject = 'WhatsApp Group';
+            try {
+              if (instanceSock?.groupMetadata) {
+                const meta = await instanceSock.groupMetadata(remoteJid);
+                if (meta?.subject) fetchedSubject = meta.subject;
+              }
+            } catch {}
+            monitored = await MonitoredGroup.create({
+              groupJid: remoteJid,
+              groupName: fetchedSubject,
+              isMonitored: true,
+              isPaused: false
+            });
+            serviceLogger.info('[WA_AUTO_MONITOR] Auto-registered and monitored new active group.', {
+              groupJid: remoteJid,
+              groupName: fetchedSubject
+            });
+          } else if (existingGroup.isPaused) {
+            monitored = existingGroup;
+          } else {
+            existingGroup.isMonitored = true;
+            await existingGroup.save();
+            monitored = existingGroup;
+          }
+        } catch (e) {
+          serviceLogger.warn('[WA_AUTO_MONITOR] Could not auto-register group:', { error: e.message });
+        }
+      }
+
       if (!monitored) {
         let activeMonitoredInfo = [];
         try {
