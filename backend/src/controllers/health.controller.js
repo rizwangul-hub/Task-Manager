@@ -16,7 +16,8 @@ export const getHealth = (req, res) => {
   const response = {
     status: isHealthy ? 'healthy' : 'degraded',
     service: 'PixxTechnologiees Task Manager API',
-    version: '4.0.0',
+    version: '4.1.0',
+    build: 'b5affae-inbound-fix',
     environment: env.NODE_ENV,
     uptimeSeconds: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
