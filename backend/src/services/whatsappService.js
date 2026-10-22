@@ -242,6 +242,11 @@ export const createWhatsAppService = ({
     totalDecryptionFailures: 0,
     disconnectCount: 0
   };
+  const recentInboundAuditLogs = [];
+  const recordAudit = (entry) => {
+    recentInboundAuditLogs.push({ time: new Date().toISOString(), ...entry });
+    if (recentInboundAuditLogs.length > 30) recentInboundAuditLogs.shift();
+  };
   let connectionState = CONNECTION_STATES.DISCONNECTED;
   let initializationPromise = null;
   let reconnectPromise = null;
@@ -349,6 +354,7 @@ export const createWhatsAppService = ({
     }
 
     if ((!isGroup && !isDirect) || remoteJid === 'status@broadcast') {
+      recordAudit({ event: 'dropped_not_group_or_direct', remoteJid, fromMe });
       serviceLogger.info('[WA_INBOUND_FILTER] Ignored non-group and non-direct message or status broadcast.', {
         remoteJid,
         isGroup,
@@ -365,6 +371,7 @@ export const createWhatsAppService = ({
 
     if (fromMe) {
       if (process.env.WHATSAPP_ALLOW_FROM_ME !== 'true') {
+        recordAudit({ event: 'dropped_fromMe_disabled', remoteJid, messageId });
         serviceLogger.info('[WA_INBOUND_FILTER] Ignored message sent by the connected account (fromMe=true). Set WHATSAPP_ALLOW_FROM_ME=true in backend/.env to enable self-testing.', {
           remoteJid,
           messageId
@@ -378,6 +385,7 @@ export const createWhatsAppService = ({
 
     const messageTimestamp = getWhatsAppMessageTimestamp(msg);
     if (!messageTimestamp) {
+      recordAudit({ event: 'dropped_no_timestamp', remoteJid, messageId, raw: msg?.messageTimestamp });
       serviceLogger.warn('[WA_INBOUND_FILTER] Ignored group message without a valid provider timestamp.', {
         messageId,
         rawTimestamp: msg?.messageTimestamp
@@ -386,6 +394,7 @@ export const createWhatsAppService = ({
     }
     const checkpoint = await getInboundCheckpoint();
     if (!isAfterWhatsAppProcessingCheckpoint(messageTimestamp, checkpoint)) {
+      recordAudit({ event: 'dropped_checkpoint', remoteJid, messageId, msgTime: messageTimestamp.toISOString(), checkpoint });
       serviceLogger.info('[WA_INBOUND_FILTER] Ignored group message at or before the saved processing checkpoint.', {
         messageId,
         messageTimestamp: messageTimestamp.toISOString(),
@@ -421,6 +430,7 @@ export const createWhatsAppService = ({
 
     if (!messageText) {
       counters.totalDecryptionFailures += 1;
+      recordAudit({ event: 'dropped_no_text_undecrypted', remoteJid, messageId, messageKeys: msg?.message ? Object.keys(msg.message) : [] });
       serviceLogger.warn('[WA_INBOUND_FILTER] Message had no extractable text (undecryptable, media-only, or stub).', {
         messageId,
         remoteJid,
@@ -469,6 +479,7 @@ export const createWhatsAppService = ({
       }
 
       if (!monitored) {
+        recordAudit({ event: 'dropped_unmonitored_group', remoteJid, messageId });
         let activeMonitoredInfo = [];
         try {
           const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
@@ -487,6 +498,7 @@ export const createWhatsAppService = ({
         return;
       }
       if (monitored.isPaused) {
+        recordAudit({ event: 'dropped_paused_group', remoteJid, messageId, groupName: monitored.groupName });
         serviceLogger.info('[WA_INBOUND_FILTER] Ignored message: Monitored group is currently paused.', {
           groupJid: remoteJid,
           groupName: monitored.groupName
@@ -522,6 +534,7 @@ export const createWhatsAppService = ({
       existing = await TaskDraft.findOne({ groupJid: remoteJid, messageId });
     }
     if (existing) {
+      recordAudit({ event: 'dropped_existing_draft', remoteJid, messageId });
       serviceLogger.info('[WA_INBOUND_DUP] Message already has a draft; skipped duplicate.');
       return;
     }
@@ -697,12 +710,14 @@ export const createWhatsAppService = ({
         }
 
         if (newStatus === 'ignored') {
+          recordAudit({ event: 'draft_saved_ignored', remoteJid, messageId, sender: senderName, text: messageText, reason: extraction.reason });
           serviceLogger.info('[WA_DRAFT_IGNORED] Message classified as non-task (casual chat). Saved as ignored, omitted from review queue and real-time alerts.', {
             draftId: String(draft?._id || ''),
             messageId,
             reason: extraction.reason || 'Not an actionable task'
           });
         } else {
+          recordAudit({ event: 'draft_saved_actionable', remoteJid, messageId, sender: senderName, text: messageText, status: newStatus, title: extraction.title });
           counters.totalDraftsCreated += 1;
           serviceLogger.info('[WA_DRAFT_SAVED] Task draft persisted to MongoDB successfully.', {
             draftId: String(draft?._id || ''),
@@ -1157,6 +1172,22 @@ export const createWhatsAppService = ({
           const messages = upsertData?.messages;
           const msgList = Array.isArray(messages) ? messages : [];
 
+          recordAudit({
+            event: 'messages.upsert',
+            type,
+            count: msgList.length,
+            items: msgList.map((m) => ({
+              id: m.key?.id || 'unknown',
+              remoteJid: m.key?.remoteJid || 'unknown',
+              participant: m.key?.participant || m.participant || null,
+              fromMe: Boolean(m.key?.fromMe),
+              pushName: m.pushName || null,
+              hasMessage: Boolean(m.message),
+              keys: m.message ? Object.keys(m.message) : [],
+              extractedText: extractFullMessageText(m)
+            }))
+          });
+
           // Temporary safe diagnostic log at the VERY beginning of messages.upsert
           serviceLogger.info('[WA_DIAGNOSTIC][MESSAGES_UPSERT_START]', {
             eventType: type,
@@ -1523,7 +1554,8 @@ export const createWhatsAppService = ({
       totalExtractionFailures: counters.totalExtractionFailures,
       totalDecryptionFailures: counters.totalDecryptionFailures,
       disconnectCount: counters.disconnectCount
-    }
+    },
+    recentInboundAudit: recentInboundAuditLogs
   });
 
   const getParticipatingGroups = async () => {
