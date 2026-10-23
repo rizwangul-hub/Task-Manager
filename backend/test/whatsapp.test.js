@@ -1007,9 +1007,7 @@ test('direct message ciphertext stub preserves existing pairwise session state',
   });
   await service.waitForInboundProcessing();
 
-  assert.equal(setMutations.length >= 1, true);
-  assert.equal(setMutations[0]?.session?.['40471913066553.0'], null);
-  assert.equal(setMutations[0]?.session?.['40471913066553.35'], null);
+  assert.deepEqual(setMutations, []);
   await service.close();
 });
 

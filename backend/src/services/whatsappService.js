@@ -520,37 +520,6 @@ export const createWhatsAppService = ({
         messageKeys: msg?.message ? Object.keys(msg.message) : []
       });
 
-      // If a message arrives undecrypted (CIPHERTEXT stub), purge stale/corrupted Signal session state
-      // so the sender's incoming prekey retry (pkmsg) can rebuild clean state without MessageCounterError.
-      if (msg?.messageStubType === 2 && currentAuthKeys?.set) {
-        try {
-          if (!isGroup) {
-            const user = remoteJid.split('@')[0].split(':')[0];
-            const device = remoteJid.split(':')[1]?.split('@')[0] || 0;
-            const sessionId = `${user}.${device}`;
-            void currentAuthKeys.set({ session: { [sessionId]: null } }).catch(() => {});
-            serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable direct pairwise session.', { sessionId });
-          } else {
-            const participantJid = msg.key?.participant || msg.participant || '';
-            if (participantJid) {
-              const partUser = participantJid.split('@')[0].split(':')[0];
-              const explicitDevice = participantJid.split(':')[1]?.split('@')[0];
-              const devicesToPurge = explicitDevice ? [Number(explicitDevice)] : [0, 1, 2, 33, 34, 35, 36, 99];
-              const sessionMutations = {};
-              const senderKeyMutations = {};
-              for (const dev of devicesToPurge) {
-                sessionMutations[`${partUser}.${dev}`] = null;
-                senderKeyMutations[`${remoteJid}::${partUser}::${dev}`] = null;
-              }
-              void currentAuthKeys.set({
-                session: sessionMutations,
-                'sender-key': senderKeyMutations
-              }).catch(() => {});
-              serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable group sender key and pairwise session across candidate devices.', { partUser, devicesToPurge });
-            }
-          }
-        } catch {}
-      }
       return;
     }
 
