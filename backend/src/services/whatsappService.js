@@ -1099,10 +1099,18 @@ export const createWhatsAppService = ({
           try {
             const meta = await instanceSock.groupMetadata(group.groupJid);
             const participants = meta?.participants || [];
+            const ownUsers = new Set([
+              instanceSock?.user?.id?.split('@')[0]?.split(':')[0],
+              instanceSock?.user?.lid?.split('@')[0]?.split(':')[0]
+            ].filter(Boolean));
             const participantJids = [...new Set(
               participants
                 .map((participant) => participant.id)
                 .filter((jid) => typeof jid === 'string' && jid.includes('@'))
+                .filter((jid) => {
+                  const u = jid.split('@')[0]?.split(':')[0];
+                  return !ownUsers.has(u);
+                })
             )];
             if (participantJids.length > 0) {
               const devices = await instanceSock.getUSyncDevices(
@@ -1111,9 +1119,11 @@ export const createWhatsAppService = ({
                 false
               );
               const server = meta.addressingMode === 'lid' ? 'lid' : 's.whatsapp.net';
-              const sessionJids = [...new Set(devices.map(({ user, device }) =>
-                jidEncode(user, server, device)
-              ))];
+              const sessionJids = [...new Set(
+                devices
+                  .filter(({ user }) => !ownUsers.has(user))
+                  .map(({ user, device }) => jidEncode(user, server, device))
+              )];
               if (!sessionJids.length) continue;
               serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
                 groupJid: group.groupJid,
@@ -1210,6 +1220,54 @@ export const createWhatsAppService = ({
           }
         });
         instanceSock = newSock;
+
+        if (newSock.ws?.on) {
+          newSock.ws.on('CB:message', async (stanza) => {
+            try {
+              const from = stanza.attrs?.from;
+              const participant = stanza.attrs?.participant || stanza.attrs?.participant_pn;
+              if (!from?.endsWith('@g.us') || !participant) return;
+
+              const encNode = Array.isArray(stanza.content)
+                ? stanza.content.find((c) => c?.tag === 'enc')
+                : null;
+              if (!encNode) return;
+              const encType = encNode.attrs?.type;
+
+              if (encType === 'skmsg') {
+                const user = participant.split('@')[0].split(':')[0];
+                const device = participant.split(':')[1]?.split('@')[0] || 0;
+                const senderKeyId = `${from}::${user}::${device}`;
+
+                let hasKey = false;
+                if (authKeys?.get) {
+                  try {
+                    const existing = await authKeys.get('sender-key', [senderKeyId]);
+                    hasKey = Boolean(existing?.[senderKeyId]);
+                  } catch {}
+                }
+
+                if (!hasKey) {
+                  serviceLogger.info('[WA_SKDM_MISSING] Missing group sender key for participant. Requesting SKDM retry with prekeys.', {
+                    from,
+                    participant,
+                    senderKeyId
+                  });
+
+                  if (newSock.sendRetryRequest) {
+                    try {
+                      await newSock.sendRetryRequest(stanza, true);
+                    } catch (err) {
+                      serviceLogger.debug('[WA_RETRY_ERR] Could not send retry receipt for skmsg', { error: err?.message });
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              serviceLogger.debug('[WA_CB_MESSAGE_ERR]', { error: err?.message });
+            }
+          });
+        }
 
         newSock.ev.on('creds.update', () => {
           void saveCreds().catch((error) => {
