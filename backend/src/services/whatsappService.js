@@ -57,6 +57,28 @@ export const normalizeWhatsAppPhoneNumber = (target) => {
   return /^\d{7,15}$/.test(digits) ? digits : '';
 };
 
+const lidToPhoneCache = new Map();
+
+export const registerLidPhoneMapping = (lid, phone) => {
+  if (!lid || !phone) return;
+  const cleanLid = String(lid).split('@')[0].split(':')[0];
+  const cleanPhone = normalizeWhatsAppPhoneNumber(phone);
+  if (cleanLid && cleanPhone) {
+    lidToPhoneCache.set(cleanLid, cleanPhone);
+    lidToPhoneCache.set(`${cleanLid}@lid`, `${cleanPhone}@s.whatsapp.net`);
+  }
+};
+
+export const resolvePhoneFromLid = (target) => {
+  if (!target) return '';
+  const clean = String(target).split('@')[0].split(':')[0];
+  return lidToPhoneCache.get(clean) || lidToPhoneCache.get(target) || '';
+};
+
+export const clearLidPhoneMappings = () => {
+  lidToPhoneCache.clear();
+};
+
 const redactPhoneNumber = (value) => String(value || '').replace(/\+?\d[\d\s().-]{5,}\d/g, '[REDACTED_PHONE]');
 const redactError = (error) => redactPhoneNumber(error?.message || error || 'Unknown WhatsApp error')
   .replace(/[0-9a-fA-F]{24,}/g, '[REDACTED_ID]');
@@ -308,6 +330,7 @@ export const createWhatsAppService = ({
   let cachedGroups = null;
   let cachedGroupsAt = 0;
   let inFlightGroupsPromise = null;
+  let currentAuthKeys = null;
 
   const isReady = () => {
     const s = instanceSock;
@@ -378,12 +401,23 @@ export const createWhatsAppService = ({
         msg.participant || (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid))
       : (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid);
     let senderName = msg.pushName || '';
+    let senderPhone = '';
+    if (senderJid.endsWith('@lid')) {
+      const resolved = resolvePhoneFromLid(senderJid);
+      if (resolved) {
+        senderPhone = '+' + resolved;
+      }
+    } else {
+      const phone = normalizeWhatsAppPhoneNumber(senderJid);
+      if (phone) {
+        senderPhone = '+' + phone;
+      }
+    }
     if (!senderName) {
       if (fromMe) {
         senderName = instanceSock?.user?.name || 'Me';
       } else {
-        const phone = normalizeWhatsAppPhoneNumber(senderJid);
-        senderName = phone ? ('+' + phone) : (isGroup ? 'Group Member' : 'Direct Sender');
+        senderName = senderPhone || (isGroup ? 'Group Member' : 'Direct Sender');
       }
     }
 
@@ -471,6 +505,18 @@ export const createWhatsAppService = ({
         messageStubType: msg?.messageStubType || null,
         messageKeys: msg?.message ? Object.keys(msg.message) : []
       });
+
+      // If a direct 1-to-1 message arrives undecrypted (CIPHERTEXT), purge the stale/corrupted pairwise session
+      // so the sender's incoming prekey retry (pkmsg) can rebuild a clean incoming session without MessageCounterError.
+      if (msg?.messageStubType === 2 && !isGroup && currentAuthKeys?.set) {
+        try {
+          const user = remoteJid.split('@')[0].split(':')[0];
+          const device = remoteJid.split(':')[1]?.split('@')[0] || 0;
+          const sessionId = `${user}.${device}`;
+          void currentAuthKeys.set({ session: { [sessionId]: null } }).catch(() => {});
+          serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable pairwise session to allow clean prekey re-sync.', { sessionId });
+        } catch {}
+      }
       return;
     }
 
@@ -916,6 +962,7 @@ export const createWhatsAppService = ({
   const stopCurrentSocket = () => {
     const activeSocket = instanceSock;
     instanceSock = null;
+    currentAuthKeys = null;
     releaseCryptoConsoleFilter?.();
     releaseCryptoConsoleFilter = null;
     if (!activeSocket) return;
@@ -1099,6 +1146,11 @@ export const createWhatsAppService = ({
           try {
             const meta = await instanceSock.groupMetadata(group.groupJid);
             const participants = meta?.participants || [];
+            for (const p of participants) {
+              if (p?.lid && p?.jid) {
+                registerLidPhoneMapping(p.lid, p.jid);
+              }
+            }
             const ownUsers = new Set([
               instanceSock?.user?.id?.split('@')[0]?.split(':')[0],
               instanceSock?.user?.lid?.split('@')[0]?.split(':')[0]
@@ -1188,6 +1240,7 @@ export const createWhatsAppService = ({
         const authKeys = state.keys
           ? makeCacheableSignalKeyStore(state.keys, createBaileysLogger(serviceLogger))
           : undefined;
+        currentAuthKeys = authKeys;
         const authConfig = authKeys ? { creds: state.creds, keys: authKeys } : state;
 
         releaseCryptoConsoleFilter ??= installCryptoConsoleErrorFilter(serviceLogger);
@@ -1224,12 +1277,24 @@ export const createWhatsAppService = ({
         });
         instanceSock = newSock;
 
+        if (newSock.ev?.on) {
+          newSock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
+            registerLidPhoneMapping(lid, jid);
+            serviceLogger.info('[WA_PHONE_SHARE] Captured LID to Phone mapping', { lid, jid });
+          });
+        }
+
         if (newSock.ws?.on) {
           newSock.ws.on('CB:message', async (stanza) => {
             try {
-              const from = stanza.attrs?.from;
-              const participant = stanza.attrs?.participant || stanza.attrs?.participant_pn;
-              if (!from?.endsWith('@g.us') || !participant) return;
+              const from = stanza.attrs?.from || '';
+              if (!from || from === 'status@broadcast') return;
+
+              const participant = stanza.attrs?.participant || stanza.attrs?.participant_pn || from;
+              const participantPn = stanza.attrs?.participant_pn || stanza.attrs?.sender_pn;
+              if (participantPn && participant && participant.endsWith('@lid')) {
+                registerLidPhoneMapping(participant, participantPn);
+              }
 
               const encNode = Array.isArray(stanza.content)
                 ? stanza.content.find((c) => c?.tag === 'enc')
@@ -1237,7 +1302,7 @@ export const createWhatsAppService = ({
               if (!encNode) return;
               const encType = encNode.attrs?.type;
 
-              if (encType === 'skmsg') {
+              if (encType === 'skmsg' && from.endsWith('@g.us')) {
                 const user = participant.split('@')[0].split(':')[0];
                 const device = participant.split(':')[1]?.split('@')[0] || 0;
                 const senderKeyId = `${from}::${user}::${device}`;
@@ -1262,6 +1327,34 @@ export const createWhatsAppService = ({
                       await newSock.sendRetryRequest(stanza, true);
                     } catch (err) {
                       serviceLogger.debug('[WA_RETRY_ERR] Could not send retry receipt for skmsg', { error: err?.message });
+                    }
+                  }
+                }
+              } else if (encType === 'msg') {
+                const user = participant.split('@')[0].split(':')[0];
+                const device = participant.split(':')[1]?.split('@')[0] || 0;
+                const sessionId = `${user}.${device}`;
+
+                let hasSession = false;
+                if (authKeys?.get) {
+                  try {
+                    const existing = await authKeys.get('session', [sessionId]);
+                    hasSession = Boolean(existing?.[sessionId]);
+                  } catch {}
+                }
+
+                if (!hasSession) {
+                  serviceLogger.info('[WA_SESSION_MISSING] Missing pairwise session for direct sender. Requesting prekey retry.', {
+                    from,
+                    participant,
+                    sessionId
+                  });
+
+                  if (newSock.sendRetryRequest) {
+                    try {
+                      await newSock.sendRetryRequest(stanza, true);
+                    } catch (err) {
+                      serviceLogger.debug('[WA_RETRY_ERR] Could not send retry receipt for msg', { error: err?.message });
                     }
                   }
                 }
@@ -1776,4 +1869,9 @@ export const sendWhatsAppMessage = async (...args) =>
 export const getWhatsAppDiagnostics = () => whatsappService.getDiagnostics();
 export const getParticipatingGroups = () => whatsappService.getParticipatingGroups();
 export const runWhatsAppInboundMaintenance = (work) => whatsappService.runInboundMaintenance(work);
-export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber };
+export const whatsappListenerInternals = {
+  normalizeWhatsAppPhoneNumber,
+  registerLidPhoneMapping,
+  resolvePhoneFromLid,
+  clearLidPhoneMappings
+};
