@@ -496,6 +496,21 @@ export const createWhatsAppService = ({
         : (documentMsg?.caption?.trim() || `[File: ${documentMsg?.fileName || 'Attachment'}]`);
     }
 
+    // Filter out internal WhatsApp control frames (e.g. protocolMessage, app state sync, peer requests)
+    // These are not customer messages and should never be counted as decryption failures.
+    const isControlProtocolMessage = Boolean(
+      innerMsg?.protocolMessage ||
+      (innerMsg?.senderKeyDistributionMessage && !innerMsg?.conversation && !innerMsg?.extendedTextMessage)
+    );
+    if (isControlProtocolMessage) {
+      serviceLogger.debug?.('[WA_INBOUND_FILTER] Ignored internal protocol control message.', {
+        messageId,
+        remoteJid,
+        protocolType: innerMsg?.protocolMessage?.type
+      });
+      return;
+    }
+
     if (!messageText) {
       counters.totalDecryptionFailures += 1;
       recordAudit({ event: 'dropped_no_text_undecrypted', remoteJid, messageId, messageKeys: msg?.message ? Object.keys(msg.message) : [] });
