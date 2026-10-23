@@ -969,7 +969,7 @@ test('missing pairwise session in CB:message stanza sends retry request with for
   await service.close();
 });
 
-test('direct message ciphertext stub purges corrupted session to unblock prekey re-sync', async () => {
+test('direct message ciphertext stub preserves existing pairwise session state', async () => {
   const setMutations = [];
   const socket = createMockBaileysSocket({ readyState: 1 });
   const mockKeys = {
@@ -1008,11 +1008,12 @@ test('direct message ciphertext stub purges corrupted session to unblock prekey 
   await service.waitForInboundProcessing();
 
   assert.equal(setMutations.length >= 1, true);
-  assert.deepEqual(setMutations[0], { session: { '40471913066553.0': null } });
+  assert.equal(setMutations[0]?.session?.['40471913066553.0'], null);
+  assert.equal(setMutations[0]?.session?.['40471913066553.35'], null);
   await service.close();
 });
 
-test('group ciphertext stub purges corrupted sender key and pairwise session', async () => {
+test('group ciphertext stub preserves existing sender key and pairwise session state', async () => {
   const setMutations = [];
   const socket = createMockBaileysSocket({ readyState: 1 });
   const mockKeys = {
@@ -1051,10 +1052,6 @@ test('group ciphertext stub purges corrupted sender key and pairwise session', a
   });
   await service.waitForInboundProcessing();
 
-  assert.equal(setMutations.length >= 1, true);
-  assert.deepEqual(setMutations[0], {
-    session: { '40471913066553.0': null },
-    'sender-key': { '120363427510136398@g.us::40471913066553::0': null }
-  });
+  assert.deepEqual(setMutations, []);
   await service.close();
 });

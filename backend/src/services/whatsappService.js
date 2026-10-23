@@ -330,7 +330,6 @@ export const createWhatsAppService = ({
   let cachedGroups = null;
   let cachedGroupsAt = 0;
   let inFlightGroupsPromise = null;
-  let currentAuthKeys = null;
 
   const isReady = () => {
     const s = instanceSock;
@@ -535,14 +534,19 @@ export const createWhatsAppService = ({
             const participantJid = msg.key?.participant || msg.participant || '';
             if (participantJid) {
               const partUser = participantJid.split('@')[0].split(':')[0];
-              const partDevice = participantJid.split(':')[1]?.split('@')[0] || 0;
-              const sessionId = `${partUser}.${partDevice}`;
-              const senderKeyId = `${remoteJid}::${partUser}::${partDevice}`;
+              const explicitDevice = participantJid.split(':')[1]?.split('@')[0];
+              const devicesToPurge = explicitDevice ? [Number(explicitDevice)] : [0, 1, 2, 33, 34, 35, 36, 99];
+              const sessionMutations = {};
+              const senderKeyMutations = {};
+              for (const dev of devicesToPurge) {
+                sessionMutations[`${partUser}.${dev}`] = null;
+                senderKeyMutations[`${remoteJid}::${partUser}::${dev}`] = null;
+              }
               void currentAuthKeys.set({
-                session: { [sessionId]: null },
-                'sender-key': { [senderKeyId]: null }
+                session: sessionMutations,
+                'sender-key': senderKeyMutations
               }).catch(() => {});
-              serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable group sender key and pairwise session.', { senderKeyId, sessionId });
+              serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable group sender key and pairwise session across candidate devices.', { partUser, devicesToPurge });
             }
           }
         } catch {}
@@ -992,7 +996,6 @@ export const createWhatsAppService = ({
   const stopCurrentSocket = () => {
     const activeSocket = instanceSock;
     instanceSock = null;
-    currentAuthKeys = null;
     releaseCryptoConsoleFilter?.();
     releaseCryptoConsoleFilter = null;
     if (!activeSocket) return;
@@ -1270,7 +1273,6 @@ export const createWhatsAppService = ({
         const authKeys = state.keys
           ? makeCacheableSignalKeyStore(state.keys, createBaileysLogger(serviceLogger))
           : undefined;
-        currentAuthKeys = authKeys;
         const authConfig = authKeys ? { creds: state.creds, keys: authKeys } : state;
 
         releaseCryptoConsoleFilter ??= installCryptoConsoleErrorFilter(serviceLogger);
