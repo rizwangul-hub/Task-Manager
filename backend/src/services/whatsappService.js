@@ -1125,12 +1125,15 @@ export const createWhatsAppService = ({
                   .map(({ user, device }) => jidEncode(user, server, device))
               )];
               if (!sessionJids.length) continue;
-              serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
-                groupJid: group.groupJid,
-                participantCount: sessionJids.length,
-                addressingMode: meta.addressingMode || 'pn'
-              });
-              await instanceSock.assertSessions(sessionJids, false);
+              const shouldAssert = Boolean(inboundDependencies.getMonitoredGroups) || process.env.WHATSAPP_BOOTSTRAP_GROUP_SESSIONS === 'true';
+              if (shouldAssert) {
+                serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
+                  groupJid: group.groupJid,
+                  participantCount: sessionJids.length,
+                  addressingMode: meta.addressingMode || 'pn'
+                });
+                await instanceSock.assertSessions(sessionJids, false);
+              }
             }
           } catch (groupMetaErr) {
             serviceLogger.warn('[WA_SESSION_BOOTSTRAP_WARN]', { groupJid: group.groupJid, error: groupMetaErr?.message });
