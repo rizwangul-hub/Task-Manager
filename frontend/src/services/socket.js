@@ -64,11 +64,16 @@ export const socketService = {
       return socketInstance;
     }
 
-    if (socketInstance && socketInstance.connected) {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('task_access_token') : null;
+
+    if (socketInstance) {
+      socketInstance.auth = { token };
+      if (!socketInstance.active) {
+        socketInstance.connect();
+      }
       return socketInstance;
     }
 
-    const token = typeof window !== 'undefined' ? localStorage.getItem('task_access_token') : null;
     socketInstance = io(SOCKET_URL, {
       withCredentials: true,
       auth: { token },
