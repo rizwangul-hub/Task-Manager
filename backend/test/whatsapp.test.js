@@ -24,7 +24,7 @@ const createMockBaileysSocket = ({ readyState = 0 } = {}) => {
   const handlers = new Map();
   return {
     user: { id: 'sender@s.whatsapp.net' },
-    ws: { readyState },
+    ws: { readyState, handlers: new Map(), on(event, handler) { this.handlers.set(event, handler); }, emit(event, payload) { this.handlers.get(event)?.(payload); } },
     ev: {
       on(event, handler) { handlers.set(event, handler); },
       removeAllListeners() { handlers.clear(); }
@@ -921,5 +921,93 @@ test('group session bootstrap uses Baileys-discovered participant devices and th
     jids: ['member-lid:2@lid', 'member-lid@lid'],
     force: false
   }]);
+  await service.close();
+});
+
+
+test('LID to phone number mapping registers and resolves correctly', () => {
+  const { registerLidPhoneMapping, resolvePhoneFromLid, clearLidPhoneMappings } = whatsappListenerInternals;
+  clearLidPhoneMappings();
+
+  registerLidPhoneMapping('40471913066553@lid', '03179500901');
+  assert.equal(resolvePhoneFromLid('40471913066553@lid'), '923179500901');
+  assert.equal(resolvePhoneFromLid('40471913066553'), '923179500901');
+  assert.equal(resolvePhoneFromLid('unknown@lid'), '');
+
+  clearLidPhoneMappings();
+});
+
+test('missing pairwise session in CB:message stanza sends retry request with forced prekeys', async () => {
+  const retryRequests = [];
+  const socket = createMockBaileysSocket({ readyState: 1 });
+  socket.sendRetryRequest = async (stanza, forceIncludeKeys) => {
+    retryRequests.push({ stanza, forceIncludeKeys });
+  };
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true }, keys: { get: async () => ({}) } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => socket,
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    serviceLogger: { info() {}, warn() {}, error() {}, debug() {} }
+  });
+
+  await service.initialize();
+  const mockStanza = {
+    tag: 'message',
+    attrs: { from: '40471913066553@lid', id: 'TEST_MSG_ID' },
+    content: [{ tag: 'enc', attrs: { type: 'msg' } }]
+  };
+  socket.ws.emit('CB:message', mockStanza);
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.equal(retryRequests.length, 1);
+  assert.equal(retryRequests[0].forceIncludeKeys, true);
+  assert.equal(retryRequests[0].stanza.attrs.id, 'TEST_MSG_ID');
+  await service.close();
+});
+
+test('direct message ciphertext stub purges corrupted session to unblock prekey re-sync', async () => {
+  const setMutations = [];
+  const socket = createMockBaileysSocket({ readyState: 1 });
+  const mockKeys = {
+    get: async () => ({}),
+    set: async (mutation) => {
+      setMutations.push(mutation);
+    }
+  };
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true }, keys: mockKeys },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => socket,
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-22T00:00:00.000Z')
+    },
+    serviceLogger: { info() {}, warn() {}, error() {}, debug() {} }
+  });
+
+  await service.initialize();
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [{
+      key: {
+        id: 'ciphertext-direct-message',
+        remoteJid: '40471913066553@lid',
+        fromMe: false
+      },
+      messageTimestamp: Math.floor(new Date('2026-10-22T00:01:00.000Z').getTime() / 1000),
+      messageStubType: 2
+    }]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(setMutations.length >= 1, true);
+  assert.deepEqual(setMutations[0], { session: { '40471913066553.0': null } });
   await service.close();
 });
