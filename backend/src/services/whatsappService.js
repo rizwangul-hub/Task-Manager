@@ -7,6 +7,7 @@ import makeWASocket, {
   isJidBroadcast,
   isJidNewsletter,
   jidNormalizedUser,
+  jidDecode,
   proto,
   downloadMediaMessage
 } from '@whiskeysockets/baileys';
@@ -39,6 +40,24 @@ const getSignalSessionJids = (...values) => [...new Set(
     .map((jid) => jidNormalizedUser(jid))
     .filter((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'))
 )];
+
+export const expandMultiDeviceJids = (jids) => {
+  const result = new Set();
+  const list = Array.isArray(jids) ? jids : [jids];
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'string') continue;
+    const normalized = jidNormalizedUser(raw);
+    if (!normalized.endsWith('@s.whatsapp.net') && !normalized.endsWith('@lid')) continue;
+    result.add(normalized);
+    const [user, server] = normalized.split('@');
+    if (user && server) {
+      for (let dev = 0; dev <= 3; dev += 1) {
+        result.add(`${user}:${dev}@${server}`);
+      }
+    }
+  }
+  return [...result];
+};
 
 export const cacheRecentWhatsAppMessage = (keyId, messageProto) => {
   if (!keyId || !messageProto) return;
@@ -189,7 +208,7 @@ export function extractFullMessageText(msg) {
 
 export const getWhatsAppMessageTimestamp = (msg) => {
   let ts = msg?.messageTimestamp;
-  if (!ts) return new Date();
+  if (!ts) return null;
   if (typeof ts === 'object') {
     if (typeof ts.low === 'number') {
       ts = ts.low;
@@ -203,21 +222,18 @@ export const getWhatsAppMessageTimestamp = (msg) => {
     ts = Number(ts);
   }
   const timestamp = Number(ts);
-  return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp * 1000) : new Date();
+  return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp * 1000) : null;
 };
 
-export const isAfterWhatsAppProcessingCheckpoint = (messageTimestamp, checkpoint, allowGraceSeconds = 300) => {
+export const isAfterWhatsAppProcessingCheckpoint = (messageTimestamp, checkpoint) => {
   if (!checkpoint) return true;
   const messageDate = new Date(messageTimestamp);
   const checkpointDate = new Date(checkpoint);
-  if (!Number.isFinite(messageDate.getTime()) || !Number.isFinite(checkpointDate.getTime())) {
-    return true;
-  }
-  // If message arrived recently (within the last 15 minutes of server time), never drop as historical
-  if (Date.now() - messageDate.getTime() < 15 * 60 * 1000) {
-    return true;
-  }
-  return (messageDate.getTime() + (allowGraceSeconds * 1000)) >= checkpointDate.getTime();
+  return (
+    Number.isFinite(messageDate.getTime()) &&
+    Number.isFinite(checkpointDate.getTime()) &&
+    messageDate > checkpointDate
+  );
 };
 
 let defaultWhatsAppService = null;
@@ -1104,11 +1120,12 @@ export const createWhatsAppService = ({
               ])
             ).filter((jid) => !ownJids.has(jid));
             if (jidsToAssert.length > 0) {
+              const multiDeviceJids = expandMultiDeviceJids(jidsToAssert);
               serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
                 groupJid: group.groupJid,
-                participantCount: jidsToAssert.length
+                participantCount: multiDeviceJids.length
               });
-              await instanceSock.assertSessions(jidsToAssert, false);
+              await instanceSock.assertSessions(multiDeviceJids, false);
             }
           } catch (groupMetaErr) {
             serviceLogger.warn('[WA_SESSION_BOOTSTRAP_WARN]', { groupJid: group.groupJid, error: groupMetaErr?.message });
@@ -1199,6 +1216,62 @@ export const createWhatsAppService = ({
         });
         instanceSock = newSock;
 
+        if (newSock.ws?.on) {
+          newSock.ws.on('CB:message', async (stanza) => {
+            try {
+              const from = stanza.attrs?.from;
+              const participant = stanza.attrs?.participant || stanza.attrs?.participant_pn;
+              if (!from?.endsWith('@g.us') || !participant) return;
+
+              const encNode = Array.isArray(stanza.content)
+                ? stanza.content.find((c) => c?.tag === 'enc')
+                : null;
+              if (!encNode) return;
+              const encType = encNode.attrs?.type;
+
+              if (encType === 'skmsg') {
+                const { user, device } = jidDecode(participant) || {};
+                const senderKeyId = user ? `${from}::${user}::${device || 0}` : null;
+
+                let hasKey = false;
+                if (senderKeyId && authKeys?.get) {
+                  try {
+                    const existing = await authKeys.get('sender-key', [senderKeyId]);
+                    hasKey = Boolean(existing?.[senderKeyId]);
+                  } catch {}
+                }
+
+                if (!hasKey) {
+                  serviceLogger.info('[WA_SKDM_MISSING] Missing group sender key for participant. Asserting sessions & requesting SKDM retry.', {
+                    from,
+                    participant,
+                    senderKeyId
+                  });
+
+                  const pUser = participant.split('@')[0].split(':')[0];
+                  const pServer = participant.includes('@lid') ? 'lid' : 's.whatsapp.net';
+                  const deviceJids = [0, 1, 2, 3].map((d) => `${pUser}:${d}@${pServer}`);
+                  if (newSock.assertSessions) {
+                    try {
+                      await newSock.assertSessions(deviceJids, false);
+                    } catch {}
+                  }
+
+                  if (newSock.sendRetryRequest) {
+                    try {
+                      await newSock.sendRetryRequest(stanza, true);
+                    } catch (err) {
+                      serviceLogger.debug('[WA_RETRY_ERR] Could not send retry receipt for skmsg', { error: err?.message });
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              serviceLogger.debug('[WA_CB_MESSAGE_ERR]', { error: err?.message });
+            }
+          });
+        }
+
         newSock.ev.on('creds.update', () => {
           void saveCreds().catch((error) => {
             lastError = redactError(error);
@@ -1286,7 +1359,9 @@ export const createWhatsAppService = ({
             return;
           }
 
-          const messagesToProcess = messages;
+          const messagesToProcess = type === 'append'
+            ? messages.filter((m) => m.key?.fromMe)
+            : messages;
 
           if (messagesToProcess.length === 0) {
             return;
