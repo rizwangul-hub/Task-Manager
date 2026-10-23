@@ -7,7 +7,7 @@ import makeWASocket, {
   isJidBroadcast,
   isJidNewsletter,
   jidNormalizedUser,
-  jidDecode,
+  jidEncode,
   proto,
   downloadMediaMessage
 } from '@whiskeysockets/baileys';
@@ -32,14 +32,6 @@ const CONNECTION_STATES = {
 
 const MAX_MESSAGE_CACHE_SIZE = 1000;
 const recentMessageStore = new Map();
-
-const getSignalSessionJids = (...values) => [...new Set(
-  values
-    .flat()
-    .filter((value) => typeof value === 'string' && value.includes('@'))
-    .map((jid) => jidNormalizedUser(jid))
-    .filter((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'))
-)];
 
 export const cacheRecentWhatsAppMessage = (keyId, messageProto) => {
   if (!keyId || !messageProto) return;
@@ -438,28 +430,6 @@ export const createWhatsAppService = ({
     }
 
     if (!messageText) {
-      const sessionJids = getSignalSessionJids(
-        senderJid,
-        msg.key?.participant,
-        msg.key?.participantPn,
-        msg.key?.participantLid,
-        msg.key?.senderPn,
-        msg.key?.senderLid,
-        msg.participant
-      );
-      if (instanceSock?.assertSessions && sessionJids.length) {
-        try {
-          serviceLogger.info('[WA_ASSERT_SESSION_ON_CIPHERTEXT] Refreshing Signal sessions for an undecrypted sender.', {
-            identityCount: sessionJids.length
-          });
-          await instanceSock.assertSessions(sessionJids, true);
-        } catch (err) {
-          serviceLogger.warn('[WA_ASSERT_SESSION_FAILED]', {
-            identityCount: sessionJids.length,
-            error: err?.message
-          });
-        }
-      }
       counters.totalDecryptionFailures += 1;
       recordAudit({ event: 'dropped_no_text_undecrypted', remoteJid, messageId, messageKeys: msg?.message ? Object.keys(msg.message) : [] });
       serviceLogger.warn('[WA_INBOUND_FILTER] Message had no extractable text (undecryptable, media-only, or stub).', {
@@ -1083,30 +1053,41 @@ export const createWhatsAppService = ({
   const syncMonitoredGroupSessions = async () => {
     if (!instanceSock || !isReady()) return;
     try {
-      const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
-      const groups = await MonitoredGroup.find({ isMonitored: true }).lean();
+      const groups = inboundDependencies.getMonitoredGroups
+        ? await inboundDependencies.getMonitoredGroups()
+        : await (await import('../models/monitoredGroup.model.js'))
+          .MonitoredGroup.find({ isMonitored: true }).lean();
       for (const group of groups) {
-        if (instanceSock?.groupMetadata && instanceSock?.assertSessions) {
+        if (
+          instanceSock?.groupMetadata &&
+          instanceSock?.getUSyncDevices &&
+          instanceSock?.assertSessions
+        ) {
           try {
             const meta = await instanceSock.groupMetadata(group.groupJid);
             const participants = meta?.participants || [];
-            const ownJids = new Set(getSignalSessionJids(
-              instanceSock?.user?.id,
-              instanceSock?.user?.lid
-            ));
-            const jidsToAssert = getSignalSessionJids(
-              participants.flatMap((participant) => [
-                participant.id,
-                participant.jid,
-                participant.lid
-              ])
-            ).filter((jid) => !ownJids.has(jid));
-            if (jidsToAssert.length > 0) {
+            const participantJids = [...new Set(
+              participants
+                .map((participant) => participant.id)
+                .filter((jid) => typeof jid === 'string' && jid.includes('@'))
+            )];
+            if (participantJids.length > 0) {
+              const devices = await instanceSock.getUSyncDevices(
+                participantJids,
+                false,
+                false
+              );
+              const server = meta.addressingMode === 'lid' ? 'lid' : 's.whatsapp.net';
+              const sessionJids = [...new Set(devices.map(({ user, device }) =>
+                jidEncode(user, server, device)
+              ))];
+              if (!sessionJids.length) continue;
               serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
                 groupJid: group.groupJid,
-                participantCount: jidsToAssert.length
+                participantCount: sessionJids.length,
+                addressingMode: meta.addressingMode || 'pn'
               });
-              await instanceSock.assertSessions(jidsToAssert, false);
+              await instanceSock.assertSessions(sessionJids, false);
             }
           } catch (groupMetaErr) {
             serviceLogger.warn('[WA_SESSION_BOOTSTRAP_WARN]', { groupJid: group.groupJid, error: groupMetaErr?.message });
@@ -1196,60 +1177,6 @@ export const createWhatsAppService = ({
           }
         });
         instanceSock = newSock;
-
-        if (newSock.ws?.on) {
-          newSock.ws.on('CB:message', async (stanza) => {
-            try {
-              const from = stanza.attrs?.from;
-              const participant = stanza.attrs?.participant || stanza.attrs?.participant_pn;
-              if (!from?.endsWith('@g.us') || !participant) return;
-
-              const encNode = Array.isArray(stanza.content)
-                ? stanza.content.find((c) => c?.tag === 'enc')
-                : null;
-              if (!encNode) return;
-              const encType = encNode.attrs?.type;
-
-              if (encType === 'skmsg') {
-                const { user, device } = jidDecode(participant) || {};
-                const senderKeyId = user ? `${from}::${user}::${device || 0}` : null;
-
-                let hasKey = false;
-                if (senderKeyId && authKeys?.get) {
-                  try {
-                    const existing = await authKeys.get('sender-key', [senderKeyId]);
-                    hasKey = Boolean(existing?.[senderKeyId]);
-                  } catch {}
-                }
-
-                if (!hasKey) {
-                  serviceLogger.info('[WA_SKDM_MISSING] Missing group sender key for participant. Asserting sessions & requesting SKDM retry.', {
-                    from,
-                    participant,
-                    senderKeyId
-                  });
-
-                  const cleanParticipant = jidNormalizedUser(participant);
-                  if (newSock.assertSessions && cleanParticipant) {
-                    try {
-                      await newSock.assertSessions([cleanParticipant], false);
-                    } catch {}
-                  }
-
-                  if (newSock.sendRetryRequest) {
-                    try {
-                      await newSock.sendRetryRequest(stanza, true);
-                    } catch (err) {
-                      serviceLogger.debug('[WA_RETRY_ERR] Could not send retry receipt for skmsg', { error: err?.message });
-                    }
-                  }
-                }
-              }
-            } catch (err) {
-              serviceLogger.debug('[WA_CB_MESSAGE_ERR]', { error: err?.message });
-            }
-          });
-        }
 
         newSock.ev.on('creds.update', () => {
           void saveCreds().catch((error) => {
@@ -1755,4 +1682,4 @@ export const sendWhatsAppMessage = async (...args) =>
 export const getWhatsAppDiagnostics = () => whatsappService.getDiagnostics();
 export const getParticipatingGroups = () => whatsappService.getParticipatingGroups();
 export const runWhatsAppInboundMaintenance = (work) => whatsappService.runInboundMaintenance(work);
-export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber, getSignalSessionJids };
+export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber };

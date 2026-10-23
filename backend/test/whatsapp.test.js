@@ -799,7 +799,7 @@ test('reset waits for active extraction and checkpoint rejects replayed messages
   await restartedService.close();
 });
 
-test('ciphertext stubs refresh Signal sessions for both participant LID and phone-number identities', async () => {
+test('ciphertext stubs rely on Baileys native retry handling instead of issuing duplicate session requests', async () => {
   const sessionAssertions = [];
   const socket = createMockBaileysSocket({ readyState: 1 });
   socket.assertSessions = async (jids, force) => {
@@ -837,10 +837,62 @@ test('ciphertext stubs refresh Signal sessions for both participant LID and phon
   });
   await service.waitForInboundProcessing();
 
-  assert.deepEqual(sessionAssertions, [{
-    jids: ['19995550123@s.whatsapp.net', '999000000001@lid'],
-    force: true
-  }]);
+  assert.deepEqual(sessionAssertions, []);
   assert.equal(service.getDiagnostics().stats.totalDecryptionFailures, 1);
+  await service.close();
+});
+
+test('group session bootstrap uses Baileys-discovered participant devices and the group addressing mode', async () => {
+  const syncAssertions = [];
+  const discoveryCalls = [];
+  let finishBootstrap;
+  const bootstrapFinished = new Promise((resolve) => {
+    finishBootstrap = resolve;
+  });
+  const socket = createMockBaileysSocket({ readyState: 1 });
+  socket.groupMetadata = async () => ({
+    addressingMode: 'lid',
+    participants: [
+      { id: 'member-lid@lid', jid: 'member-phone@s.whatsapp.net', lid: 'member-lid@lid' }
+    ]
+  });
+  socket.getUSyncDevices = async (jids, useCache, ignoreZeroDevices) => {
+    discoveryCalls.push({ jids, useCache, ignoreZeroDevices });
+    return [
+      { user: 'member-lid', device: 2 },
+      { user: 'member-lid', device: 0 }
+    ];
+  };
+  socket.assertSessions = async (jids, force) => {
+    syncAssertions.push({ jids, force });
+    finishBootstrap();
+  };
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => socket,
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    inboundDependencies: {
+      getMonitoredGroups: async () => [{ groupJid: '120363000000000000@g.us' }]
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  socket.emit('connection.update', { connection: 'open' });
+  await bootstrapFinished;
+
+  assert.deepEqual(discoveryCalls, [{
+    jids: ['member-lid@lid'],
+    useCache: false,
+    ignoreZeroDevices: false
+  }]);
+  assert.deepEqual(syncAssertions, [{
+    jids: ['member-lid:2@lid', 'member-lid@lid'],
+    force: false
+  }]);
   await service.close();
 });
