@@ -6,6 +6,7 @@ import makeWASocket, {
   WAMessageStatus,
   isJidBroadcast,
   isJidNewsletter,
+  jidNormalizedUser,
   proto,
   downloadMediaMessage
 } from '@whiskeysockets/baileys';
@@ -30,6 +31,14 @@ const CONNECTION_STATES = {
 
 const MAX_MESSAGE_CACHE_SIZE = 1000;
 const recentMessageStore = new Map();
+
+const getSignalSessionJids = (...values) => [...new Set(
+  values
+    .flat()
+    .filter((value) => typeof value === 'string' && value.includes('@'))
+    .map((jid) => jidNormalizedUser(jid))
+    .filter((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'))
+)];
 
 export const cacheRecentWhatsAppMessage = (keyId, messageProto) => {
   if (!keyId || !messageProto) return;
@@ -342,7 +351,8 @@ export const createWhatsAppService = ({
     const isDirect = remoteJid.endsWith('@s.whatsapp.net') || remoteJid.endsWith('@lid');
     const fromMe = Boolean(msg.key?.fromMe);
     const senderJid = isGroup
-      ? (msg.key?.participant || msg.participant || (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid))
+      ? (msg.key?.participantPn || msg.key?.participant || msg.key?.participantLid ||
+        msg.participant || (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid))
       : (fromMe ? (instanceSock?.user?.id || remoteJid) : remoteJid);
     let senderName = msg.pushName || '';
     if (!senderName) {
@@ -430,14 +440,26 @@ export const createWhatsAppService = ({
     }
 
     if (!messageText) {
-      if (instanceSock?.assertSessions && senderJid) {
+      const sessionJids = getSignalSessionJids(
+        senderJid,
+        msg.key?.participant,
+        msg.key?.participantPn,
+        msg.key?.participantLid,
+        msg.key?.senderPn,
+        msg.key?.senderLid,
+        msg.participant
+      );
+      if (instanceSock?.assertSessions && sessionJids.length) {
         try {
-          serviceLogger.info('[WA_ASSERT_SESSION_ON_CIPHERTEXT] Asserting Signal session for undecrypted sender', { senderJid });
-          void instanceSock.assertSessions([senderJid], true).catch((err) => {
-            serviceLogger.warn('[WA_ASSERT_SESSION_FAILED]', { senderJid, error: err?.message });
+          serviceLogger.info('[WA_ASSERT_SESSION_ON_CIPHERTEXT] Refreshing Signal sessions for an undecrypted sender.', {
+            identityCount: sessionJids.length
           });
-        } catch (assertErr) {
-          serviceLogger.warn('[WA_ASSERT_SESSION_FAILED]', { senderJid, error: assertErr?.message });
+          await instanceSock.assertSessions(sessionJids, true);
+        } catch (err) {
+          serviceLogger.warn('[WA_ASSERT_SESSION_FAILED]', {
+            identityCount: sessionJids.length,
+            error: err?.message
+          });
         }
       }
       counters.totalDecryptionFailures += 1;
@@ -1070,9 +1092,17 @@ export const createWhatsAppService = ({
           try {
             const meta = await instanceSock.groupMetadata(group.groupJid);
             const participants = meta?.participants || [];
-            const jidsToAssert = participants
-              .map((p) => p.id)
-              .filter((id) => Boolean(id) && id !== instanceSock?.user?.id);
+            const ownJids = new Set(getSignalSessionJids(
+              instanceSock?.user?.id,
+              instanceSock?.user?.lid
+            ));
+            const jidsToAssert = getSignalSessionJids(
+              participants.flatMap((participant) => [
+                participant.id,
+                participant.jid,
+                participant.lid
+              ])
+            ).filter((jid) => !ownJids.has(jid));
             if (jidsToAssert.length > 0) {
               serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
                 groupJid: group.groupJid,
@@ -1671,4 +1701,4 @@ export const sendWhatsAppMessage = async (...args) =>
 export const getWhatsAppDiagnostics = () => whatsappService.getDiagnostics();
 export const getParticipatingGroups = () => whatsappService.getParticipatingGroups();
 export const runWhatsAppInboundMaintenance = (work) => whatsappService.runInboundMaintenance(work);
-export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber };
+export const whatsappListenerInternals = { normalizeWhatsAppPhoneNumber, getSignalSessionJids };

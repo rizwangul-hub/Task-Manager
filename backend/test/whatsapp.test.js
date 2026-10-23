@@ -798,3 +798,49 @@ test('reset waits for active extraction and checkpoint rejects replayed messages
   assert.deepEqual(drafts.map((draft) => draft.messageId), ['before-reset', 'new-after-restart']);
   await restartedService.close();
 });
+
+test('ciphertext stubs refresh Signal sessions for both participant LID and phone-number identities', async () => {
+  const sessionAssertions = [];
+  const socket = createMockBaileysSocket({ readyState: 1 });
+  socket.assertSessions = async (jids, force) => {
+    sessionAssertions.push({ jids, force });
+  };
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true } },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => socket,
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-22T00:00:00.000Z')
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [{
+      key: {
+        id: 'ciphertext-lid-message',
+        remoteJid: '120363000000000000@g.us',
+        participant: '999000000001@lid',
+        participantPn: '19995550123@s.whatsapp.net',
+        participantLid: '999000000001@lid',
+        fromMe: false
+      },
+      messageTimestamp: Math.floor(new Date('2026-10-22T00:01:00.000Z').getTime() / 1000),
+      messageStubType: 2
+    }]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.deepEqual(sessionAssertions, [{
+    jids: ['19995550123@s.whatsapp.net', '999000000001@lid'],
+    force: true
+  }]);
+  assert.equal(service.getDiagnostics().stats.totalDecryptionFailures, 1);
+  await service.close();
+});

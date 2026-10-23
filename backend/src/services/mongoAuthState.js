@@ -8,41 +8,39 @@ import { WhatsAppAuth } from '../models/whatsappAuth.model.js';
  * Automatically mirrors all credentials and Signal keys between MongoDB Atlas
  * and a local folder cache, ensuring sessions persist across container restarts on Render.
  */
-export const useMongoAuthState = async (folderPath) => {
+export const useMongoAuthState = async (folderPath, { authModel = WhatsAppAuth } = {}) => {
   const folder = resolve(folderPath || './auth_info_baileys');
   await mkdir(folder, { recursive: true, mode: 0o700 });
 
-  // 1. On startup: restore from MongoDB if local folder is missing creds.json
-  const hasLocalCreds = await stat(join(folder, 'creds.json')).then(() => true).catch(() => false);
+  let hasLocalCreds = false;
+  try {
+    await stat(join(folder, 'creds.json'));
+    hasLocalCreds = true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
 
   if (!hasLocalCreds) {
-    try {
-      const savedDocs = await WhatsAppAuth.find().lean();
-      if (savedDocs.length > 0) {
-        for (const doc of savedDocs) {
-          try {
-            await writeFile(join(folder, doc.key), doc.value, 'utf-8');
-          } catch {}
-        }
+    const savedDocs = await authModel.find().lean();
+    for (const doc of savedDocs) {
+      try {
+        await writeFile(join(folder, doc.key), doc.value, { encoding: 'utf-8', flag: 'wx' });
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
       }
-    } catch {}
+    }
   } else {
-    // If local creds exist, sync them to MongoDB so MongoDB is up to date
-    try {
-      const files = await readdir(folder);
-      for (const file of files) {
-        if (file.endsWith('.json')) {
-          try {
-            const content = await readFile(join(folder, file), 'utf-8');
-            await WhatsAppAuth.updateOne(
-              { key: file },
-              { $set: { key: file, value: content } },
-              { upsert: true }
-            );
-          } catch {}
-        }
+    const files = await readdir(folder);
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const content = await readFile(join(folder, file), 'utf-8');
+        await authModel.updateOne(
+          { key: file },
+          { $set: { key: file, value: content } },
+          { upsert: true }
+        );
       }
-    } catch {}
+    }
   }
 
   const fixFileName = (file) => file?.replace(/\//g, '__')?.replace(/:/g, '-');
@@ -51,15 +49,12 @@ export const useMongoAuthState = async (folderPath) => {
     const fixed = fixFileName(file);
     const filePath = join(folder, fixed);
     const stringified = JSON.stringify(data, BufferJSON.replacer);
-    try {
-      await writeFile(filePath, stringified, 'utf-8');
-    } catch {}
-
-    WhatsAppAuth.updateOne(
+    await writeFile(filePath, stringified, 'utf-8');
+    await authModel.updateOne(
       { key: fixed },
       { $set: { key: fixed, value: stringified } },
       { upsert: true }
-    ).catch(() => {});
+    );
   };
 
   const readData = async (file) => {
@@ -68,18 +63,12 @@ export const useMongoAuthState = async (folderPath) => {
     try {
       const raw = await readFile(filePath, 'utf-8');
       return JSON.parse(raw, BufferJSON.reviver);
-    } catch {
-      try {
-        const doc = await WhatsAppAuth.findOne({ key: fixed }).lean();
-        if (doc?.value) {
-          try {
-            await writeFile(filePath, doc.value, 'utf-8');
-          } catch {}
-          return JSON.parse(doc.value, BufferJSON.reviver);
-        }
-      } catch {}
-      return null;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
     }
+
+    const doc = await authModel.findOne({ key: fixed }).lean();
+    return doc?.value ? JSON.parse(doc.value, BufferJSON.reviver) : null;
   };
 
   const removeData = async (file) => {
@@ -87,8 +76,10 @@ export const useMongoAuthState = async (folderPath) => {
     const filePath = join(folder, fixed);
     try {
       await unlink(filePath);
-    } catch {}
-    WhatsAppAuth.deleteOne({ key: fixed }).catch(() => {});
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    await authModel.deleteOne({ key: fixed });
   };
 
   const creds = (await readData('creds.json')) || initAuthCreds();
