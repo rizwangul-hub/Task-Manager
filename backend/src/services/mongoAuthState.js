@@ -71,6 +71,9 @@ export const useMongoAuthState = async (folderPath, { authModel = WhatsAppAuth }
   };
 
   const creds = (await readData('creds.json')) || initAuthCreds();
+  if (creds?.me?.id && !creds.registered) {
+    creds.registered = true;
+  }
 
   return {
     state: {

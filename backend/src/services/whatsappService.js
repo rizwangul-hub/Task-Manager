@@ -9,7 +9,8 @@ import makeWASocket, {
   jidNormalizedUser,
   jidEncode,
   proto,
-  downloadMediaMessage
+  downloadMediaMessage,
+  getBinaryNodeChild
 } from '@whiskeysockets/baileys';
 import { useMongoAuthState, clearMongoAuthState } from './mongoAuthState.js';
 import NodeCache from '@cacheable/node-cache';
@@ -1306,9 +1307,8 @@ export const createWhatsAppService = ({
                 registerLidPhoneMapping(participant, participantPn);
               }
 
-              const encNode = Array.isArray(stanza.content)
-                ? stanza.content.find((c) => c?.tag === 'enc')
-                : null;
+              const encNode = (typeof getBinaryNodeChild === 'function' ? getBinaryNodeChild(stanza, 'enc') : null) ||
+                (Array.isArray(stanza.content) ? stanza.content.find((c) => c?.tag === 'enc') : null);
               if (!encNode) return;
               const encType = encNode.attrs?.type;
 
