@@ -1357,7 +1357,7 @@ export const createWhatsAppService = ({
           }
 
           const messagesToProcess = type === 'append'
-            ? messages.filter((m) => m.key?.fromMe)
+            ? messages.filter((m) => m.key?.fromMe && (Boolean(m.message) || Boolean(extractFullMessageText(m))))
             : messages;
 
           if (messagesToProcess.length === 0) {
