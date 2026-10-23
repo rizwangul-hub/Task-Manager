@@ -1124,7 +1124,7 @@ export const createWhatsAppService = ({
             } catch {
               // Ignore lookup errors
             }
-            return proto.Message.fromObject({});
+            return undefined;
           }
         });
         instanceSock = newSock;
@@ -1145,6 +1145,9 @@ export const createWhatsAppService = ({
           if (Array.isArray(updates)) {
             for (const item of updates) {
               if (item?.update?.message && item?.key) {
+                if (item.key.id) {
+                  cacheRecentWhatsAppMessage(item.key.id, item.update.message);
+                }
                 const syntheticMessage = {
                   key: item.key,
                   message: item.update.message,
@@ -1153,7 +1156,8 @@ export const createWhatsAppService = ({
                 };
                 serviceLogger.info('[WA_INBOUND][MESSAGE_UPDATE_RECEIVED] Processing decrypted/updated message.', {
                   id: item.key.id,
-                  remoteJid: item.key.remoteJid
+                  remoteJid: item.key.remoteJid,
+                  participant: item.key.participant || null
                 });
                 void enqueueInboundWork(async () => {
                   try {
@@ -1203,7 +1207,7 @@ export const createWhatsAppService = ({
             }))
           });
 
-          const isAllowedType = type === 'notify' || (type === 'append' && process.env.WHATSAPP_ALLOW_FROM_ME === 'true');
+          const isAllowedType = type === 'notify' || type === 'append';
           if (!isAllowedType || !Array.isArray(messages)) {
             serviceLogger.info('[WA_INBOUND_FILTER] Ignored upsert event with non-allowed type.', {
               type,
@@ -1212,9 +1216,7 @@ export const createWhatsAppService = ({
             return;
           }
 
-          const messagesToProcess = type === 'append'
-            ? messages.filter((m) => Boolean(m?.key?.fromMe))
-            : messages;
+          const messagesToProcess = messages;
 
           if (messagesToProcess.length === 0) {
             return;
