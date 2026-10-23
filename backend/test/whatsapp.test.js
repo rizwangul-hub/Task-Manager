@@ -1011,3 +1011,50 @@ test('direct message ciphertext stub purges corrupted session to unblock prekey 
   assert.deepEqual(setMutations[0], { session: { '40471913066553.0': null } });
   await service.close();
 });
+
+test('group ciphertext stub purges corrupted sender key and pairwise session', async () => {
+  const setMutations = [];
+  const socket = createMockBaileysSocket({ readyState: 1 });
+  const mockKeys = {
+    get: async () => ({}),
+    set: async (mutation) => {
+      setMutations.push(mutation);
+    }
+  };
+  const service = createWhatsAppService({
+    authStateFactory: async () => ({
+      state: { creds: { registered: true }, keys: mockKeys },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => socket,
+    reconnectDelaysMs: [60_000],
+    onReady: async () => {},
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-22T00:00:00.000Z')
+    },
+    serviceLogger: { info() {}, warn() {}, error() {}, debug() {} }
+  });
+
+  await service.initialize();
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [{
+      key: {
+        id: 'ciphertext-group-message',
+        remoteJid: '120363427510136398@g.us',
+        participant: '40471913066553@lid',
+        fromMe: false
+      },
+      messageTimestamp: Math.floor(new Date('2026-10-22T00:01:00.000Z').getTime() / 1000),
+      messageStubType: 2
+    }]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(setMutations.length >= 1, true);
+  assert.deepEqual(setMutations[0], {
+    session: { '40471913066553.0': null },
+    'sender-key': { '120363427510136398@g.us::40471913066553::0': null }
+  });
+  await service.close();
+});

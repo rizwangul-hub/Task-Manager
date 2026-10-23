@@ -506,15 +506,30 @@ export const createWhatsAppService = ({
         messageKeys: msg?.message ? Object.keys(msg.message) : []
       });
 
-      // If a direct 1-to-1 message arrives undecrypted (CIPHERTEXT), purge the stale/corrupted pairwise session
-      // so the sender's incoming prekey retry (pkmsg) can rebuild a clean incoming session without MessageCounterError.
-      if (msg?.messageStubType === 2 && !isGroup && currentAuthKeys?.set) {
+      // If a message arrives undecrypted (CIPHERTEXT stub), purge stale/corrupted Signal session state
+      // so the sender's incoming prekey retry (pkmsg) can rebuild clean state without MessageCounterError.
+      if (msg?.messageStubType === 2 && currentAuthKeys?.set) {
         try {
-          const user = remoteJid.split('@')[0].split(':')[0];
-          const device = remoteJid.split(':')[1]?.split('@')[0] || 0;
-          const sessionId = `${user}.${device}`;
-          void currentAuthKeys.set({ session: { [sessionId]: null } }).catch(() => {});
-          serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable pairwise session to allow clean prekey re-sync.', { sessionId });
+          if (!isGroup) {
+            const user = remoteJid.split('@')[0].split(':')[0];
+            const device = remoteJid.split(':')[1]?.split('@')[0] || 0;
+            const sessionId = `${user}.${device}`;
+            void currentAuthKeys.set({ session: { [sessionId]: null } }).catch(() => {});
+            serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable direct pairwise session.', { sessionId });
+          } else {
+            const participantJid = msg.key?.participant || msg.participant || '';
+            if (participantJid) {
+              const partUser = participantJid.split('@')[0].split(':')[0];
+              const partDevice = participantJid.split(':')[1]?.split('@')[0] || 0;
+              const sessionId = `${partUser}.${partDevice}`;
+              const senderKeyId = `${remoteJid}::${partUser}::${partDevice}`;
+              void currentAuthKeys.set({
+                session: { [sessionId]: null },
+                'sender-key': { [senderKeyId]: null }
+              }).catch(() => {});
+              serviceLogger.info('[WA_PURGE_CIPHERTEXT_SESSION] Purged undecryptable group sender key and pairwise session.', { senderKeyId, sessionId });
+            }
+          }
         } catch {}
       }
       return;
@@ -1276,6 +1291,15 @@ export const createWhatsAppService = ({
           }
         });
         instanceSock = newSock;
+
+        const originalSendRetryRequest = newSock.sendRetryRequest?.bind(newSock);
+        if (originalSendRetryRequest) {
+          newSock.sendRetryRequest = async (node, forceIncludeKeys = false) => {
+            // Always force include prekeys on retry requests so the remote sender
+            // can re-encrypt and distribute SenderKey / Whisper session immediately.
+            return originalSendRetryRequest(node, true);
+          };
+        }
 
         if (newSock.ev?.on) {
           newSock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
