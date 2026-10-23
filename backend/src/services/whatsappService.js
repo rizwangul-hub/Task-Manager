@@ -430,6 +430,16 @@ export const createWhatsAppService = ({
     }
 
     if (!messageText) {
+      if (instanceSock?.assertSessions && senderJid) {
+        try {
+          serviceLogger.info('[WA_ASSERT_SESSION_ON_CIPHERTEXT] Asserting Signal session for undecrypted sender', { senderJid });
+          void instanceSock.assertSessions([senderJid], true).catch((err) => {
+            serviceLogger.warn('[WA_ASSERT_SESSION_FAILED]', { senderJid, error: err?.message });
+          });
+        } catch (assertErr) {
+          serviceLogger.warn('[WA_ASSERT_SESSION_FAILED]', { senderJid, error: assertErr?.message });
+        }
+      }
       counters.totalDecryptionFailures += 1;
       recordAudit({ event: 'dropped_no_text_undecrypted', remoteJid, messageId, messageKeys: msg?.message ? Object.keys(msg.message) : [] });
       serviceLogger.warn('[WA_INBOUND_FILTER] Message had no extractable text (undecryptable, media-only, or stub).', {
@@ -1050,6 +1060,36 @@ export const createWhatsAppService = ({
     }
   };
 
+  const syncMonitoredGroupSessions = async () => {
+    if (!instanceSock || !isReady()) return;
+    try {
+      const { MonitoredGroup } = await import('../models/monitoredGroup.model.js');
+      const groups = await MonitoredGroup.find({ isMonitored: true }).lean();
+      for (const group of groups) {
+        if (instanceSock?.groupMetadata && instanceSock?.assertSessions) {
+          try {
+            const meta = await instanceSock.groupMetadata(group.groupJid);
+            const participants = meta?.participants || [];
+            const jidsToAssert = participants
+              .map((p) => p.id)
+              .filter((id) => Boolean(id) && id !== instanceSock?.user?.id);
+            if (jidsToAssert.length > 0) {
+              serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
+                groupJid: group.groupJid,
+                participantCount: jidsToAssert.length
+              });
+              await instanceSock.assertSessions(jidsToAssert, false);
+            }
+          } catch (groupMetaErr) {
+            serviceLogger.warn('[WA_SESSION_BOOTSTRAP_WARN]', { groupJid: group.groupJid, error: groupMetaErr?.message });
+          }
+        }
+      }
+    } catch (err) {
+      serviceLogger.warn('[WA_SESSION_BOOTSTRAP_ERR]', { error: err?.message });
+    }
+  };
+
   const initialize = async () => {
     if (initializationPromise) return initializationPromise;
     if (instanceSock) return instanceSock;
@@ -1306,6 +1346,7 @@ export const createWhatsAppService = ({
                 lastError = redactError(error);
                 serviceLogger.error(`[WA_OUTBOX] Could not resume pending notifications: ${lastError}`);
               });
+              void syncMonitoredGroupSessions().catch(() => {});
             }
           }
 

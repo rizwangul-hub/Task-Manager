@@ -53,7 +53,14 @@ export const SettingsPage = () => {
   // User Profile & WhatsApp state
   const [profileWhatsAppNumber, setProfileWhatsAppNumber] = useState(user?.whatsappNumber || '');
   const [savingProfile, setSavingProfile] = useState(false);
-  const [whatsappDiagnostics, setWhatsAppDiagnostics] = useState(null);
+  const [whatsappDiagnostics, setWhatsAppDiagnostics] = useState(() => {
+    try {
+      const cached = typeof window !== 'undefined' ? sessionStorage.getItem('wa_diag_cache') : null;
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
   const [whatsappDiagnosticsError, setWhatsAppDiagnosticsError] = useState('');
   const [whatsappDiagnosticsErrorStatus, setWhatsAppDiagnosticsErrorStatus] = useState(null);
   const [testWhatsAppNumber, setTestWhatsAppNumber] = useState('');
@@ -228,7 +235,11 @@ export const SettingsPage = () => {
   const fetchWhatsAppDiagnostics = useCallback(async () => {
     try {
       const response = await whatsappService.getDiagnostics();
-      setWhatsAppDiagnostics(response.data?.diagnostics || null);
+      const diag = response.data?.diagnostics || null;
+      setWhatsAppDiagnostics(diag);
+      if (diag && typeof window !== 'undefined') {
+        try { sessionStorage.setItem('wa_diag_cache', JSON.stringify(diag)); } catch {}
+      }
       setWhatsAppDiagnosticsError('');
       setWhatsAppDiagnosticsErrorStatus(null);
     } catch (error) {
@@ -474,10 +485,11 @@ export const SettingsPage = () => {
                   status={whatsappDiagnosticsError ? 'degraded' :
                     whatsappDiagnostics?.connectionStatus === 'connected' ? 'healthy' :
                     whatsappDiagnostics?.connectionStatus === 'connecting' ||
-                    whatsappDiagnostics?.connectionStatus === 'qr_required' ? 'degraded' : 'offline'}
+                    whatsappDiagnostics?.connectionStatus === 'qr_required' ? 'degraded' :
+                    !whatsappDiagnostics ? 'degraded' : 'offline'}
                   label={whatsappDiagnosticsError
                     ? whatsappDiagnosticsErrorStatus === 401 ? 'AUTH REQUIRED' : 'UNAVAILABLE'
-                    : whatsappDiagnostics?.connectionStatus?.replaceAll('_', ' ').toUpperCase() || 'DISCONNECTED'}
+                    : whatsappDiagnostics?.connectionStatus?.replaceAll('_', ' ').toUpperCase() || 'CONNECTING...'}
                 />
               </div>
               <div className="diagnostic-row">
@@ -486,10 +498,10 @@ export const SettingsPage = () => {
                   <span className="diagnostic-desc">Persistent Baileys session authorization status</span>
                 </div>
                 <StatusBadge
-                  status={whatsappDiagnosticsError ? 'degraded' : whatsappDiagnostics?.authenticationValid ? 'healthy' : 'offline'}
+                  status={whatsappDiagnosticsError ? 'degraded' : whatsappDiagnostics?.authenticationValid ? 'healthy' : !whatsappDiagnostics ? 'degraded' : 'offline'}
                   label={whatsappDiagnosticsError
                     ? whatsappDiagnosticsErrorStatus === 401 ? 'AUTH REQUIRED' : 'UNAVAILABLE'
-                    : whatsappDiagnostics?.authenticationValid ? 'VALID' : 'NOT READY'}
+                    : whatsappDiagnostics?.authenticationValid ? 'VALID' : !whatsappDiagnostics ? 'CHECKING...' : 'NOT READY'}
                 />
               </div>
 
@@ -509,7 +521,7 @@ export const SettingsPage = () => {
                 <strong>Last connection:</strong>{' '}
                 {whatsappDiagnostics?.lastConnectionAt
                   ? new Date(whatsappDiagnostics.lastConnectionAt).toLocaleString()
-                  : 'Waiting for initial link'}
+                  : whatsappDiagnostics ? 'Waiting for initial link' : 'Checking status...'}
               </p>
 
               {whatsappDiagnostics?.qrRequired && (
