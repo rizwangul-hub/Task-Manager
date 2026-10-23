@@ -73,17 +73,40 @@ const installCryptoConsoleErrorFilter = (serviceLogger) => {
   let filterState = globalThis[cryptoConsoleFilterKey];
   if (!filterState) {
     const originalError = console.error;
+    const originalInfo = console.info;
+    const originalWarn = console.warn;
     const state = {
       originalError,
+      originalInfo,
+      originalWarn,
       consumers: 0,
       lastWarningAt: 0,
       suppressedErrors: 0,
-      wrapper: null
+      suppressedSessionLogs: 0,
+      errorWrapper: null,
+      infoWrapper: null,
+      warnWrapper: null
     };
-    state.wrapper = (...args) => {
-      const message = args.map((value) =>
-        typeof value === 'string' ? value : value?.message || ''
-      ).join(' ');
+    const getMessage = (args) => args.map((value) =>
+      typeof value === 'string' ? value : value?.message || ''
+    ).join(' ');
+    const suppressSessionLog = (args) => {
+      if (!/^(Closing|Opening) session:|^Session already (closed|open)/i.test(getMessage(args))) {
+        return false;
+      }
+      state.suppressedSessionLogs += 1;
+      const now = Date.now();
+      if (now - state.lastWarningAt >= 60_000) {
+        serviceLogger.warn(
+          `[WA_CRYPTO] Suppressed ${state.suppressedSessionLogs} libsignal session log(s) that contain key material.`
+        );
+        state.lastWarningAt = now;
+        state.suppressedSessionLogs = 0;
+      }
+      return true;
+    };
+    state.errorWrapper = (...args) => {
+      const message = getMessage(args);
       if (/Failed to decrypt message with any known session|Session error: Bad MAC|Bad MAC|Over 2000 messages into the future|Session error/i.test(message)) {
         state.suppressedErrors += 1;
         const now = Date.now();
@@ -98,9 +121,17 @@ const installCryptoConsoleErrorFilter = (serviceLogger) => {
       }
       state.originalError.apply(console, args);
     };
+    state.infoWrapper = (...args) => {
+      if (!suppressSessionLog(args)) state.originalInfo.apply(console, args);
+    };
+    state.warnWrapper = (...args) => {
+      if (!suppressSessionLog(args)) state.originalWarn.apply(console, args);
+    };
     filterState = state;
     globalThis[cryptoConsoleFilterKey] = state;
-    console.error = state.wrapper;
+    console.error = state.errorWrapper;
+    console.info = state.infoWrapper;
+    console.warn = state.warnWrapper;
   }
 
   filterState.consumers += 1;
@@ -110,7 +141,9 @@ const installCryptoConsoleErrorFilter = (serviceLogger) => {
     released = true;
     filterState.consumers -= 1;
     if (filterState.consumers === 0) {
-      if (console.error === filterState.wrapper) console.error = filterState.originalError;
+      if (console.error === filterState.errorWrapper) console.error = filterState.originalError;
+      if (console.info === filterState.infoWrapper) console.info = filterState.originalInfo;
+      if (console.warn === filterState.warnWrapper) console.warn = filterState.originalWarn;
       delete globalThis[cryptoConsoleFilterKey];
     }
   };

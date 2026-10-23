@@ -405,6 +405,33 @@ test('libsignal direct decryption console errors are rate limited and restored o
   assert.equal(console.error, originalConsoleError);
 });
 
+test('libsignal session debug output containing key material is suppressed and restored on close', async () => {
+  const warnings = [];
+  const originalConsoleInfo = console.info;
+  const originalConsoleWarn = console.warn;
+  const { service } = createMockedWhatsAppService({
+    serviceLogger: { info() {}, warn(message) { warnings.push(message); }, error() {} }
+  });
+  await service.initialize();
+  try {
+    assert.notEqual(console.info, originalConsoleInfo);
+    assert.notEqual(console.warn, originalConsoleWarn);
+    console.info('Closing session:', {
+      currentRatchet: { ephemeralKeyPair: { privKey: 'private-signal-key' } }
+    });
+    console.info('Opening session:', { privateKey: 'private-signal-key' });
+    console.warn('Session already closed', { privateKey: 'private-signal-key' });
+
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /Suppressed 1 libsignal session log/);
+    assert.doesNotMatch(warnings[0], /private-signal-key/);
+  } finally {
+    await service.close();
+  }
+  assert.equal(console.info, originalConsoleInfo);
+  assert.equal(console.warn, originalConsoleWarn);
+});
+
 test('automatic reconnection stops after the configured attempt limit', async () => {
   const sockets = [];
   const service = createWhatsAppService({
