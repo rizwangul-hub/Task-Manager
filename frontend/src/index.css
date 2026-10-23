@@ -1164,10 +1164,54 @@ body {
 }
 
 /* Settings Page */
+.settings-tab-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border-light, #e2e8f0);
+  padding-bottom: 8px;
+  overflow-x: auto;
+}
+
+.settings-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-muted, #64748b);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  white-space: nowrap;
+}
+
+.settings-tab-btn:hover {
+  color: var(--text-main, #0f172a);
+  background: var(--bg-hover, #f1f5f9);
+}
+
+.settings-tab-btn.is-active {
+  color: #2563eb;
+  background: #eff6ff;
+  font-weight: 600;
+}
+
 .settings-page-grid {
   display: grid;
-  grid-template-columns: 3fr 2fr;
-  gap: 24px;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+.settings-two-col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+  align-items: start;
 }
 
 .settings-card {

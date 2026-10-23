@@ -9,6 +9,7 @@ import makeWASocket, {
   proto,
   downloadMediaMessage
 } from '@whiskeysockets/baileys';
+import { useMongoAuthState, clearMongoAuthState } from './mongoAuthState.js';
 import NodeCache from '@cacheable/node-cache';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, rename, stat, unlink } from 'node:fs/promises';
@@ -219,7 +220,7 @@ export function getWhatsAppSocket() {
 
 export const createWhatsAppService = ({
   socketFactory = makeWASocket,
-  authStateFactory = useMultiFileAuthState,
+  authStateFactory = useMongoAuthState,
   authInfoPath = env.WHATSAPP.authInfoPath,
   serviceLogger = defaultLogger,
   loggedOutCode = DisconnectReason.loggedOut,
@@ -904,6 +905,7 @@ export const createWhatsAppService = ({
     }
 
     const backupPath = `${authPath}.backup-${Date.now()}-${randomUUID()}`;
+    await clearMongoAuthState().catch(() => {});
     try {
       await fileSystem.rename(authPath, backupPath);
       await fileSystem.mkdir(authPath, { recursive: true, mode: 0o700 });
