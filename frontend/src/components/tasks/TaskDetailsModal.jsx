@@ -39,6 +39,7 @@ export const TaskDetailsModal = ({
   onClose,
   taskId,
   onTaskUpdated,
+  onTaskDeleted,
   initialTab = 'overview'
 }) => {
   const { user, canEditTask, canManageBoard } = useAuth();
@@ -51,6 +52,28 @@ export const TaskDetailsModal = ({
   const [whatsappHistoryError, setWhatsappHistoryError] = useState('');
   const [retryingNotificationId, setRetryingNotificationId] = useState(null);
   const [loadingTask, setLoadingTask] = useState(false);
+  const [deletingTask, setDeletingTask] = useState(false);
+
+  const handleDeleteCurrentTask = async () => {
+    if (!canManage) {
+      toast.error('Only managers or admins can delete tasks.');
+      return;
+    }
+    const confirmed = window.confirm(`Are you sure you want to delete "${task?.title}"? It will be removed from the system.`);
+    if (!confirmed) return;
+
+    setDeletingTask(true);
+    try {
+      await taskService.deleteTask(taskId);
+      toast.success('Task removed successfully.');
+      onTaskDeleted?.(taskId);
+      onClose();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to delete task.');
+    } finally {
+      setDeletingTask(false);
+    }
+  };
   const [taskError, setTaskError] = useState(null);
 
   // Activity Timeline State
@@ -491,6 +514,33 @@ export const TaskDetailsModal = ({
                 <option value="Done">Done</option>
               </select>
             </div>
+
+            {canManage && (
+              <button
+                type="button"
+                className="task-modal-delete-btn"
+                title="Delete this task"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  color: '#ef4444',
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  padding: '0.25rem 0.6rem',
+                  borderRadius: '4px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  marginLeft: 'auto'
+                }}
+                onClick={handleDeleteCurrentTask}
+                disabled={deletingTask}
+              >
+                <Trash2 size={13} />
+                <span>{deletingTask ? 'Deleting...' : 'Delete Task'}</span>
+              </button>
+            )}
           </div>
 
           {/* Navigation Tabs */}

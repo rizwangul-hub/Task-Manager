@@ -37,7 +37,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowUpDown,
-  Layers
+  Layers,
+  Trash2
 } from 'lucide-react';
 
 const DEFAULT_COLUMNS = {
@@ -317,6 +318,28 @@ export const AllTasksPage = () => {
       toast.error(err.message || 'Failed to export CSV.');
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleDeleteTask = async (taskId, taskTitle = 'this task') => {
+    if (!canManage) {
+      toast.error('Only managers or admins can delete tasks.');
+      return;
+    }
+    const confirmed = window.confirm(`Are you sure you want to delete "${taskTitle}"? It will be removed from your board.`);
+    if (!confirmed) return;
+
+    try {
+      await taskService.deleteTask(taskId);
+      setTasks((prev) => prev.filter((t) => t._id !== taskId));
+      setTotalTasks((prev) => Math.max(0, prev - 1));
+      toast.success('Task removed from board successfully.');
+      if (detailsTaskId === taskId) {
+        setIsDetailsOpen(false);
+        setDetailsTaskId(null);
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to delete task.');
     }
   };
 
@@ -629,6 +652,7 @@ export const AllTasksPage = () => {
           tasks={tasks}
           onStatusChange={handleKanbanStatusChange}
           onSelectTask={handleOpenDetails}
+          onDeleteTask={handleDeleteTask}
           loading={loading}
         />
       ) : viewMode === 'timeline' ? (
@@ -648,6 +672,7 @@ export const AllTasksPage = () => {
             onOpenDetails={handleOpenDetails}
             onUpdateTask={handleBoardTaskUpdate}
             onQuickCreate={handleBoardQuickCreate}
+            onDeleteTask={handleDeleteTask}
             onSelectProject={(projectId) => {
               setProjectFilter(projectId);
               setPage(1);
@@ -727,6 +752,7 @@ export const AllTasksPage = () => {
                           onOpenDetails={handleOpenDetails}
                           onOpenEdit={handleOpenEdit}
                           canManage={canManage}
+                          onDeleteTask={handleDeleteTask}
                         />
                       ))}
                     </tbody>
@@ -824,6 +850,7 @@ export const AllTasksPage = () => {
                       onOpenDetails={handleOpenDetails}
                       onOpenEdit={handleOpenEdit}
                       canManage={canManage}
+                      onDeleteTask={handleDeleteTask}
                     />
                   ))}
                 </tbody>
@@ -891,6 +918,10 @@ export const AllTasksPage = () => {
           setDetailsTaskId(null);
         }}
         onTaskUpdated={fetchTasks}
+        onTaskDeleted={(deletedId) => {
+          setTasks((prev) => prev.filter((t) => t._id !== deletedId));
+          setTotalTasks((prev) => Math.max(0, prev - 1));
+        }}
       />
 
       {/* Create Task Modal */}
@@ -1179,7 +1210,7 @@ export const AllTasksPage = () => {
 };
 
 // Row component for Table view
-const TaskRow = ({ task, visibleCols, onOpenDetails, onOpenEdit, canManage }) => {
+const TaskRow = ({ task, visibleCols, onOpenDetails, onOpenEdit, canManage, onDeleteTask }) => {
   const overdue = isTaskOverdue(task.dueDate) && task.status !== 'Done';
   const hours = task.totalTimeSpentMinutes ? (task.totalTimeSpentMinutes / 60).toFixed(1) : '0';
 
@@ -1234,6 +1265,16 @@ const TaskRow = ({ task, visibleCols, onOpenDetails, onOpenEdit, canManage }) =>
             >
               <Edit2 size={15} />
             </button>}
+            {canManage && (
+              <button
+                className="action-icon-btn"
+                title="Delete task"
+                style={{ color: '#ef4444' }}
+                onClick={() => onDeleteTask?.(task._id, task.title)}
+              >
+                <Trash2 size={15} />
+              </button>
+            )}
           </div>
         </td>
       )}

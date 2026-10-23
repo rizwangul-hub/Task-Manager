@@ -33,6 +33,10 @@ export const taskService = {
     return apiClient.patch(`/tasks/${id}/archive`, { isArchived });
   },
 
+  deleteTask: async (id) => {
+    return apiClient.delete(`/tasks/${id}`);
+  },
+
   exportCsv: async (params = {}) => {
     const url = apiClient.buildUrl('/tasks/export/csv', params);
     const res = await fetch(url, {

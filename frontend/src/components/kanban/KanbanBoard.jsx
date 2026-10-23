@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import StatusBadge from '../ui/StatusBadge';
 import { isTaskOverdue, formatDate } from '../../utils/date';
-import { Clock } from 'lucide-react';
+import { Clock, Trash2 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 const STATUS_COLUMNS = [
@@ -20,9 +20,11 @@ export const KanbanBoard = ({
   tasks = [],
   onStatusChange,
   onSelectTask,
+  onDeleteTask,
   loading = false
 }) => {
-  const { canEditTask } = useAuth();
+  const { canEditTask, canManageBoard } = useAuth();
+  const canManage = canManageBoard();
   const [draggedTaskId, setDraggedTaskId] = useState(null);
   const [dragOverColumn, setDragOverColumn] = useState(null);
   const [activeMenuTaskId, setActiveMenuTaskId] = useState(null);
@@ -129,6 +131,30 @@ export const KanbanBoard = ({
                                 </option>
                               ))}
                             </select>
+                            {canManage && onDeleteTask && (
+                              <button
+                                type="button"
+                                className="kanban-card-delete-btn"
+                                title="Delete task"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#94a3b8',
+                                  cursor: 'pointer',
+                                  padding: '2px 4px',
+                                  marginLeft: '4px',
+                                  borderRadius: '4px'
+                                }}
+                                onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
+                                onMouseLeave={(e) => (e.currentTarget.style.color = '#94a3b8')}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteTask(task._id, task.title);
+                                }}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
                           </div>
                         </div>
 

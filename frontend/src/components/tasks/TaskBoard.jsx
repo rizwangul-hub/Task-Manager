@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   ContactRound,
+  Trash2,
   X
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
@@ -48,6 +49,7 @@ const TaskBoard = ({
   onOpenDetails,
   onUpdateTask,
   onQuickCreate,
+  onDeleteTask,
   onSelectProject,
   selectedProjectId,
   contactFilter,
@@ -387,6 +389,39 @@ const TaskBoard = ({
                                   <button type="button" className="board-updates-button" title="Open task updates" onClick={() => onOpenDetails(task, 'comments')}>
                                     <MessageSquare size={15} />
                                   </button>
+                                  {canManage && onDeleteTask && (
+                                    <button
+                                      type="button"
+                                      className="board-delete-button"
+                                      title="Delete task"
+                                      style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        color: '#94a3b8',
+                                        cursor: 'pointer',
+                                        padding: '4px',
+                                        borderRadius: '4px',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        transition: 'color 0.15s, background-color 0.15s'
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.color = '#ef4444';
+                                        e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.color = '#94a3b8';
+                                        e.currentTarget.style.backgroundColor = 'transparent';
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onDeleteTask(task._id, task.title);
+                                      }}
+                                    >
+                                      <Trash2 size={15} />
+                                    </button>
+                                  )}
                                 </div>
                               </td>
                               {visibleCols.assignees && (

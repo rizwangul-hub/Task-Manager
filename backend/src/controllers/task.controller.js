@@ -976,6 +976,14 @@ export const taskController = {
         details: { isArchived }
       });
 
+      if (socketService.getIO()) {
+        socketService.emitTaskUpdate(
+          task.project?._id || task.project,
+          isArchived ? 'task:archived' : 'task:restored',
+          { _id: task._id, taskId: task._id, isArchived }
+        );
+      }
+
       res.status(200).json({
         status: 'success',
         message: `Task ${isArchived ? 'archived' : 'restored'} successfully.`
