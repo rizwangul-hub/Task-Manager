@@ -24,7 +24,7 @@ app.use(async (req, res, next) => {
   }
   next();
 });
-app.set('trust proxy', env.NODE_ENV === 'production' ? 1 : false);
+app.set('trust proxy', 1);
 
 // Security HTTP headers
 app.use(helmet());

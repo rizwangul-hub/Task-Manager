@@ -41,24 +41,6 @@ const getSignalSessionJids = (...values) => [...new Set(
     .filter((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'))
 )];
 
-export const expandMultiDeviceJids = (jids) => {
-  const result = new Set();
-  const list = Array.isArray(jids) ? jids : [jids];
-  for (const raw of list) {
-    if (!raw || typeof raw !== 'string') continue;
-    const normalized = jidNormalizedUser(raw);
-    if (!normalized.endsWith('@s.whatsapp.net') && !normalized.endsWith('@lid')) continue;
-    result.add(normalized);
-    const [user, server] = normalized.split('@');
-    if (user && server) {
-      for (let dev = 0; dev <= 3; dev += 1) {
-        result.add(`${user}:${dev}@${server}`);
-      }
-    }
-  }
-  return [...result];
-};
-
 export const cacheRecentWhatsAppMessage = (keyId, messageProto) => {
   if (!keyId || !messageProto) return;
   if (recentMessageStore.size >= MAX_MESSAGE_CACHE_SIZE) {
@@ -1120,12 +1102,11 @@ export const createWhatsAppService = ({
               ])
             ).filter((jid) => !ownJids.has(jid));
             if (jidsToAssert.length > 0) {
-              const multiDeviceJids = expandMultiDeviceJids(jidsToAssert);
               serviceLogger.info('[WA_SESSION_BOOTSTRAP] Asserting Signal sessions for group participants', {
                 groupJid: group.groupJid,
-                participantCount: multiDeviceJids.length
+                participantCount: jidsToAssert.length
               });
-              await instanceSock.assertSessions(multiDeviceJids, false);
+              await instanceSock.assertSessions(jidsToAssert, false);
             }
           } catch (groupMetaErr) {
             serviceLogger.warn('[WA_SESSION_BOOTSTRAP_WARN]', { groupJid: group.groupJid, error: groupMetaErr?.message });
@@ -1248,12 +1229,10 @@ export const createWhatsAppService = ({
                     senderKeyId
                   });
 
-                  const pUser = participant.split('@')[0].split(':')[0];
-                  const pServer = participant.includes('@lid') ? 'lid' : 's.whatsapp.net';
-                  const deviceJids = [0, 1, 2, 3].map((d) => `${pUser}:${d}@${pServer}`);
-                  if (newSock.assertSessions) {
+                  const cleanParticipant = jidNormalizedUser(participant);
+                  if (newSock.assertSessions && cleanParticipant) {
                     try {
-                      await newSock.assertSessions(deviceJids, false);
+                      await newSock.assertSessions([cleanParticipant], false);
                     } catch {}
                   }
 
