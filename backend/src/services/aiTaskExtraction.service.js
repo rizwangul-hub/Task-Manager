@@ -341,11 +341,11 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
  * Call Gemini API with official REST structure, x-goog-api-key, and dynamic model fallback
  */
 export async function callGemini(apiKey, text, context, options = {}) {
-  const primaryModel = options.model || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const primaryModel = options.model || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
   const explicitApiUrl = options.apiUrl;
   const modelsToAttempt = explicitApiUrl
     ? [primaryModel]
-    : [...new Set([primaryModel, 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash-8b'])].filter(Boolean);
+    : [...new Set([primaryModel, 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'])].filter(Boolean);
 
   const isVoice = Boolean(context.audio?.buffer);
   const prompt = `You are an AI assistant in a task management system.
@@ -490,7 +490,7 @@ Return ONLY a valid JSON object matching this schema:
  */
 export async function testGeminiConnectivity({
   apiKey = process.env.GEMINI_API_KEY,
-  model = process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+  model = process.env.GEMINI_MODEL || 'gemini-3.5-flash',
   apiUrl = null
 } = {}) {
   const trimmedKey = String(apiKey || '').trim();
@@ -504,7 +504,7 @@ export async function testGeminiConnectivity({
 
   const candidateModels = apiUrl
     ? [model]
-    : [...new Set([model, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'])].filter(Boolean);
+    : [...new Set([model, 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'])].filter(Boolean);
 
   let lastStatus = 500;
   let lastErrorDetail = '';
@@ -683,7 +683,7 @@ export async function extractTaskFromWhatsAppMessage(
   // Prioritize Gemini if configured or requested
   if ((preferredProvider === 'gemini' || (!process.env.AI_PROVIDER && geminiKey)) && geminiKey) {
     try {
-      logger.info(`[WA_EXTRACT] Initiating AI task extraction with Google Gemini REST API (model: ${process.env.GEMINI_MODEL || 'gemini-2.5-flash'})...`);
+      logger.info(`[WA_EXTRACT] Initiating AI task extraction with Google Gemini REST API (model: ${process.env.GEMINI_MODEL || 'gemini-3.5-flash'})...`);
       rawOutput = await callGemini(geminiKey, text, context);
       providerUsed = 'gemini';
     } catch (err) {

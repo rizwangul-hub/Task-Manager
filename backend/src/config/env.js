@@ -148,7 +148,7 @@ export const env = {
   GEMINI: {
     apiKey: process.env.GEMINI_API_KEY || '',
     apiUrl: process.env.GEMINI_API_URL || '',
-    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    model: process.env.GEMINI_MODEL || 'gemini-3.5-flash',
     projectNumber: process.env.GOOGLE_CLOUD_PROJECT_NUMBER || '1061431060123',
     isConfigured: Boolean(process.env.GEMINI_API_KEY)
   }

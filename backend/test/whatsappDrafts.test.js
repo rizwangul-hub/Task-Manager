@@ -334,7 +334,7 @@ test('14. callGemini sends correct REST request structure with x-goog-api-key an
   }
 });
 
-test('15. callGemini dynamically falls back to gemini-1.5-flash when primary model returns 404', async () => {
+test('15. callGemini dynamically falls back to gemini-3.5-flash when primary model returns 404', async () => {
   const originalFetch = global.fetch;
   const attemptedUrls = [];
 
@@ -389,10 +389,10 @@ test('15. callGemini dynamically falls back to gemini-1.5-flash when primary mod
     );
 
     assert.equal(result.isTask, true);
-    assert.equal(result.modelUsed, 'gemini-1.5-flash');
+    assert.equal(result.modelUsed, 'gemini-3.5-flash');
     assert.equal(attemptedUrls.length, 2);
     assert.match(attemptedUrls[0], /gemini-2.5-flash/);
-    assert.match(attemptedUrls[1], /gemini-1.5-flash/);
+    assert.match(attemptedUrls[1], /gemini-3.5-flash/);
   } finally {
     global.fetch = originalFetch;
   }
