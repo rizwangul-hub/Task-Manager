@@ -12,36 +12,24 @@ export const useMongoAuthState = async (folderPath, { authModel = WhatsAppAuth }
   const folder = resolve(folderPath || './auth_info_baileys');
   await mkdir(folder, { recursive: true, mode: 0o700 });
 
-  let hasLocalCreds = false;
-  try {
-    await stat(join(folder, 'creds.json'));
-    hasLocalCreds = true;
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+  const savedDocs = await authModel.find().lean();
+  const validKeys = new Set(savedDocs.map((d) => d.key));
+
+  for (const doc of savedDocs) {
+    try {
+      await writeFile(join(folder, doc.key), doc.value, { encoding: 'utf-8' });
+    } catch {}
   }
 
-  if (!hasLocalCreds) {
-    const savedDocs = await authModel.find().lean();
-    for (const doc of savedDocs) {
-      try {
-        await writeFile(join(folder, doc.key), doc.value, { encoding: 'utf-8', flag: 'wx' });
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
+  // Remove any stale local files on disk that no longer exist in MongoDB
+  try {
+    const localFiles = await readdir(folder);
+    for (const file of localFiles) {
+      if (file.endsWith('.json') && !validKeys.has(file)) {
+        await unlink(join(folder, file)).catch(() => {});
       }
     }
-  } else {
-    const files = await readdir(folder);
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const content = await readFile(join(folder, file), 'utf-8');
-        await authModel.updateOne(
-          { key: file },
-          { $set: { key: file, value: content } },
-          { upsert: true }
-        );
-      }
-    }
-  }
+  } catch {}
 
   const fixFileName = (file) => file?.replace(/\//g, '__')?.replace(/:/g, '-');
 
