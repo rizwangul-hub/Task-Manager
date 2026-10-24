@@ -1057,6 +1057,14 @@ body {
   background-color: #64748b;
 }
 
+.badge-to_do {
+  background-color: #e0f2fe;
+  color: #0369a1;
+}
+.badge-to_do .status-badge-dot {
+  background-color: #0284c7;
+}
+
 .badge-in_progress {
   background-color: #eff6ff;
   color: #1d4ed8;
@@ -4319,18 +4327,31 @@ body {
   width: 110px;
   min-height: 27px;
   border: 0;
-  border-radius: 3px;
-  color: white;
-  font-size: 11px;
+  border-radius: 4px;
+  color: #ffffff !important;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  transition: opacity 0.15s ease, filter 0.15s ease;
 }
 
-.status-color-gray { background: #c4c4c4; }
-.status-color-green { background: #00c875; }
-.status-color-orange { background: #fdab3d; }
-.status-color-red { background: #df2f4a; }
-.status-color-purple { background: #9d50dd; }
-.status-swatch { width: 14px; height: 14px; border-radius: 3px; }
+.board-status-pill:hover {
+  filter: brightness(0.92);
+}
+
+.status-color-blue { background: #0073ea; color: #ffffff !important; }
+.status-color-sky { background: #0ea5e9; color: #ffffff !important; }
+.status-color-gray { background: #808080; color: #ffffff !important; }
+.status-color-green { background: #00c875; color: #ffffff !important; }
+.status-color-orange { background: #fdab3d; color: #ffffff !important; }
+.status-color-red { background: #df2f4a; color: #ffffff !important; }
+.status-color-purple { background: #9d50dd; color: #ffffff !important; }
+.status-swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
 .board-status-popover { left: 50%; width: 160px; transform: translateX(-50%); }
 .board-status-popover button { padding: 8px 6px; }
 .board-status-popover-portal,
