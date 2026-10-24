@@ -69,11 +69,14 @@ CRITICAL: Do not treat every message as belonging to the same department. Determ
 - Relevant Categories: SOFTWARE_DEVELOPMENT, IT_SUPPORT.
 - Distinguish: "Fix expense tracker login" is SOFTWARE_DEVELOPMENT; "verify expense entries in tracker" is PAK_FINANCE_EXPENSES or UK_PROPERTY_FINANCE.
 
-6. MANAGEMENT AND EMPLOYEE RESPONSIBILITIES:
-- Fahad Rasheed: Primary manager, executive decisions, business reports, project oversight.
-- Khurshid Anwar: Operations, administrative tasks, data verification, financial reconciliation.
-- Sarfraz: Data entry for property finance, entering expenses/rents, completing assigned ledger tasks.
-- Bicycle shop workers, developers, and staff: identified via contacts and message context.
+6. OFFICIAL COMPANY WORKERS & PERSONNEL DIRECTORY:
+- Kamran (+44 7880 716972): Boss / Owner / Executive Authority. Direct instructions from Kamran carry highest priority.
+- Fahad (+92 318 0442055): Manager. Responsible for management oversight, business reviews, operational reports, project progress, and team delegation.
+- Khurshid (+92 345 9028996): Assistant Manager. Responsible for operations, administration, verifying financial records/vouchers, and property system management.
+- Sarfraz (+92 300 8032901): Accountant. Responsible for property accounts, data-entry of rents/expenses, preparing ledgers, and financial reconciliation.
+- Rizwan (+92 317 9500901): Software Developer. Responsible for web apps, task manager, mobile PWA, bug fixing, backend APIs, and technical maintenance.
+- Usman (+92 336 4256874): CCTV. Responsible for CCTV monitoring, security review, footage checks, and photo identification.
+- Adeel (+92 316 7196110): Office Boy / CCTV. Responsible for office support, physical tasks, and CCTV assistance.
 
 7. LANGUAGE & LOCALIZATION (URDU / ROMAN URDU / ENGLISH):
 Accurately interpret English, Urdu, and Roman Urdu instructions:
@@ -206,7 +209,7 @@ export function validateExtractionOutput(raw, availableProjects = []) {
   confidence = Math.max(0, Math.min(1, confidence));
 
   let title = String(raw.title || '').trim().slice(0, 200);
-  let description = String(raw.description || '').trim().slice(0, 5000);
+  let description = String(raw.description || '').trim().slice(0, 10000);
   let assigneeName = typeof raw.assigneeName === 'string' ? raw.assigneeName.trim().slice(0, 100) : '';
   let assigneePhone = typeof raw.assigneePhone === 'string' ? raw.assigneePhone.trim().slice(0, 30) : '';
   let projectName = typeof raw.projectName === 'string' ? raw.projectName.trim().slice(0, 150) : '';
@@ -455,14 +458,22 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
     }
   }
 
-  // Detect Assignee Name (e.g. "Rizwan, please ...", "Fahad bhai...", "Khurshid...")
+  // Detect Assignee Name across official team directory
   let detectedAssignee = '';
-  if (/\b(?:fahad\s+bhai|fahad\s+rasheed|fahad)\b/i.test(trimmed)) {
+  if (/\b(?:kamran|boss|kamran\s+bhai)\b/i.test(trimmed)) {
+    detectedAssignee = 'Kamran';
+  } else if (/\b(?:fahad\s+bhai|fahad\s+rasheed|fahad)\b/i.test(trimmed)) {
     detectedAssignee = 'Fahad Rasheed';
   } else if (/\b(?:khurshid\s+bhai|khurshid\s+anwar|khurshid)\b/i.test(trimmed)) {
     detectedAssignee = 'Khurshid Anwar';
   } else if (/\bsarfraz\b/i.test(trimmed)) {
     detectedAssignee = 'Sarfraz';
+  } else if (/\b(?:rizwan\s+bhai|rizwan)\b/i.test(trimmed)) {
+    detectedAssignee = 'Rizwan';
+  } else if (/\b(?:usman\s+bhai|usman)\b/i.test(trimmed)) {
+    detectedAssignee = 'Usman';
+  } else if (/\b(?:adeel\s+bhai|adeel)\b/i.test(trimmed)) {
+    detectedAssignee = 'Adeel';
   } else {
     const nameMatch = trimmed.match(/^([a-z0-9_-]+)[,:]\s*/i) || trimmed.match(/^(?:hi|hey|hello|dear)\s+([a-z0-9_-]+)[,:]?\s*/i);
     if (nameMatch && nameMatch[1]) {
@@ -545,6 +556,20 @@ CRITICAL TASK CLASSIFICATION RULES:
    - Acknowledgements, completion reports, or simple remarks ("ok", "noted", "seen", "thanks", "Alhamdulillah report complete ho gayi").
    - Personal plans ("let's meet for lunch", "going home now").
 3. When in doubt or if the message is ambiguous casual chatting, ALWAYS set isTask: false with confidence: 0.
+
+VOICE MESSAGE / AUDIO INSTRUCTIONS:
+${isVoice ? `- Listen carefully and attentively to the entire audio note clip.
+- Accurately transcribe what was spoken into the "description" field (in English, Urdu, Hindi, Punjabi, or conversational mix).
+- If the voice message contains a genuine work directive or task, extract the action, assignee, and deadline clearly.
+- If it is casual chatter or greeting, set isTask: false.` : ''}
+
+LONG MESSAGE EVALUATION INSTRUCTIONS:
+- If a message is long, multi-paragraph, detailed, or forwarded:
+  1. Carefully read and analyze the ENTIRE message from start to finish.
+  2. Determine whether there is an actual actionable instruction or deliverable requested.
+  3. Distinguish between informational background context vs the actionable instruction.
+  4. If actionable work is requested, summarize it concisely in "title" and include the full context in "description".
+  5. If the long message is purely an announcement, forward, or casual story with NO task requested, strictly return isTask: false.
 
 BUSINESS CATEGORY SELECTION:
 Choose exactly one businessCategory from:

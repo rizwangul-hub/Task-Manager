@@ -36,7 +36,7 @@ const taskSchema = new mongoose.Schema(
       type: String,
       default: '',
       trim: true,
-      maxlength: [5000, 'Description cannot exceed 5000 characters']
+      maxlength: [10000, 'Description cannot exceed 10000 characters']
     },
     project: {
       type: mongoose.Schema.Types.ObjectId,

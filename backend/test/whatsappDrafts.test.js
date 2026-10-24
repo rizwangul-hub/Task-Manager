@@ -1347,3 +1347,105 @@ test('35. PixxTechnologiees business context and Roman Urdu task categorization'
   assert.equal(relDate.date.getDate(), 25); // Next day
 });
 
+test('36. Group message from unknown sender is ignored while saved contact creates draft', async () => {
+  const drafts = [];
+  let socketHandler;
+  const service = createWhatsAppService({
+    authInfoPath: 'backend/test-auth-grp-contact-filter',
+    authStateFactory: async () => ({
+      state: { creds: {}, keys: {} },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => ({
+      ws: { readyState: 1 },
+      user: { id: '923255984244:7@s.whatsapp.net', name: 'Task Bot' },
+      ev: {
+        on(evt, handler) {
+          if (evt === 'messages.upsert') socketHandler = handler;
+        },
+        removeAllListeners() {}
+      },
+      emit(evt, payload) {
+        if (evt === 'messages.upsert') socketHandler?.(payload);
+      },
+      end() {}
+    }),
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findMonitoredGroup: async () => ({ groupName: 'Pixx Task Force', isPaused: false }),
+      updateGroupLastMessageAt: async () => {},
+      findDraft: async () => null,
+      isAllowedSender: async ({ senderPhone }) => {
+        // Only allow registered team numbers (e.g., Kamran Boss +447880716972)
+        if (senderPhone && senderPhone.includes('447880716972')) {
+          return { fullName: 'Kamran (Boss)' };
+        }
+        return false;
+      },
+      createDraft: async (data) => {
+        drafts.push(data);
+        return data;
+      },
+      extractTask: async () => ({
+        extraction: { isTask: true, title: 'Urgent compliance review', confidence: 0.95 },
+        provider: 'gemini'
+      }),
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+
+  // 1. Group message from unknown/unsaved random person -> should be dropped
+  const unknownMsg = {
+    key: { id: 'unknown-grp-1', remoteJid: '120363049482690322@g.us', fromMe: false, participant: '923999999999@s.whatsapp.net' },
+    pushName: 'Random Member',
+    messageTimestamp: Math.floor(new Date('2026-10-16T04:00:00.000Z').getTime() / 1000),
+    message: { conversation: 'Please do this task immediately' }
+  };
+
+  // 2. Group message from saved Boss (Kamran) -> should create draft
+  const bossMsg = {
+    key: { id: 'boss-grp-1', remoteJid: '120363049482690322@g.us', fromMe: false, participant: '447880716972@s.whatsapp.net' },
+    pushName: 'Boss',
+    messageTimestamp: Math.floor(new Date('2026-10-16T04:01:00.000Z').getTime() / 1000),
+    message: { conversation: 'Team, please review the compliance certificates by tomorrow' }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [unknownMsg, bossMsg]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1, 'Only messages from saved contacts should create drafts');
+  assert.equal(drafts[0].senderName, 'Kamran (Boss)');
+  assert.equal(drafts[0].groupName, 'Pixx Task Force');
+  await service.close();
+});
+
+test('37. Team directory assignee extraction across Adeel, Fahad, Kamran, Khurshid, Rizwan, Sarfraz, Usman', () => {
+  const resultKamran = extractTaskHeuristic('Kamran bhai please review the monthly report');
+  assert.equal(resultKamran.assigneeName, 'Kamran');
+
+  const resultFahad = extractTaskHeuristic('Fahad please prepare the client invoices');
+  assert.equal(resultFahad.assigneeName, 'Fahad Rasheed');
+
+  const resultKhurshid = extractTaskHeuristic('Khurshid bhai verify the rent vouchers');
+  assert.equal(resultKhurshid.assigneeName, 'Khurshid Anwar');
+
+  const resultSarfraz = extractTaskHeuristic('Sarfraz please enter the property expenses');
+  assert.equal(resultSarfraz.assigneeName, 'Sarfraz');
+
+  const resultRizwan = extractTaskHeuristic('Rizwan please fix the task manager login bug');
+  assert.equal(resultRizwan.assigneeName, 'Rizwan');
+
+  const resultUsman = extractTaskHeuristic('Usman please check the CCTV camera footage');
+  assert.equal(resultUsman.assigneeName, 'Usman');
+
+  const resultAdeel = extractTaskHeuristic('Adeel please arrange the office supplies');
+  assert.equal(resultAdeel.assigneeName, 'Adeel');
+});
+
