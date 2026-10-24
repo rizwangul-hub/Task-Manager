@@ -14,14 +14,14 @@ export const NotificationProvider = ({ children }) => {
   const [loading, setLoading] = useState(false);
 
   const fetchUnreadCount = useCallback(async () => {
-    if (!user) return;
+    if (!user?._id) return;
     try {
       const res = await notificationService.getUnreadCount();
       setUnreadCount(res.data.unreadCount || 0);
     } catch {
       // Ignore background unread check errors silently
     }
-  }, [user]);
+  }, [user?._id]);
 
   const fetchRecentNotifications = useCallback(async () => {
     if (!user) return;
@@ -99,8 +99,12 @@ export const NotificationProvider = ({ children }) => {
     // Initial count fetch
     fetchUnreadCount();
 
-    // Polling fallback every 60 seconds
-    const interval = setInterval(fetchUnreadCount, 60000);
+    // Fallback sync every 3 minutes when tab is active
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchUnreadCount();
+      }
+    }, 180000);
 
     return () => {
       if (socket) {
@@ -108,7 +112,7 @@ export const NotificationProvider = ({ children }) => {
       }
       clearInterval(interval);
     };
-  }, [user, fetchUnreadCount, toast]);
+  }, [user?._id, fetchUnreadCount]);
 
   const value = {
     unreadCount,

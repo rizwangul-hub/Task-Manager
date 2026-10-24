@@ -61,8 +61,16 @@ export const WhatsAppInboxPage = () => {
   // Filters
   const [activeTab, setActiveTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedGroup, setSelectedGroup] = useState('');
   const [groups, setGroups] = useState([]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Projects and Contacts for dropdown
   const [projects, setProjects] = useState([]);
@@ -116,7 +124,7 @@ export const WhatsAppInboxPage = () => {
       const params = {};
       if (activeTab !== 'all') params.status = activeTab;
       if (selectedGroup) params.groupJid = selectedGroup;
-      if (searchQuery.trim()) params.search = searchQuery.trim();
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
 
       const res = await whatsappService.getDrafts(params);
       setDrafts(res.data?.drafts || []);
@@ -128,7 +136,7 @@ export const WhatsAppInboxPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, selectedGroup, searchQuery]);
+  }, [activeTab, selectedGroup, debouncedSearch]);
 
   useEffect(() => {
     fetchDrafts();

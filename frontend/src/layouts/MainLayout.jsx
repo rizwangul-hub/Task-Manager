@@ -36,7 +36,12 @@ export const MainLayout = () => {
     };
 
     checkHealth();
-    const interval = setInterval(checkHealth, 30000);
+    // Re-check periodically every 5 minutes when tab is visible
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        checkHealth();
+      }
+    }, 300000);
 
     return () => {
       isMounted = false;

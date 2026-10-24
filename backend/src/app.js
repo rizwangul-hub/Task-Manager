@@ -53,6 +53,7 @@ app.use(cors({
     }
   },
   credentials: true,
+  maxAge: 86400, // Cache CORS preflight OPTIONS responses in browser for 24 hours
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type',

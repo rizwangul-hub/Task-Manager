@@ -1,5 +1,10 @@
 import apiClient from './api';
 
+let statsCache = null;
+let statsCacheTime = 0;
+let statsInFlight = null;
+const STATS_TTL = 15000;
+
 export const taskService = {
   getTasks: async (params = {}) => {
     return apiClient.get('/tasks', { params });
@@ -18,22 +23,27 @@ export const taskService = {
   },
 
   createTask: async (taskData) => {
+    taskService.invalidateStatsCache();
     return apiClient.post('/tasks', taskData);
   },
 
   updateTask: async (id, taskData) => {
+    taskService.invalidateStatsCache();
     return apiClient.put(`/tasks/${id}`, taskData);
   },
 
   changeStatus: async (id, status) => {
+    taskService.invalidateStatsCache();
     return apiClient.patch(`/tasks/${id}/status`, { status });
   },
 
   archiveTask: async (id, isArchived) => {
+    taskService.invalidateStatsCache();
     return apiClient.patch(`/tasks/${id}/archive`, { isArchived });
   },
 
   deleteTask: async (id) => {
+    taskService.invalidateStatsCache();
     return apiClient.delete(`/tasks/${id}`);
   },
 
@@ -57,8 +67,30 @@ export const taskService = {
     window.URL.revokeObjectURL(downloadUrl);
   },
 
+  invalidateStatsCache: () => {
+    statsCache = null;
+    statsCacheTime = 0;
+  },
+
   getDashboardStats: async () => {
-    return apiClient.get('/dashboard/stats');
+    const now = Date.now();
+    if (statsCache && (now - statsCacheTime < STATS_TTL)) {
+      return statsCache;
+    }
+    if (statsInFlight) {
+      return statsInFlight;
+    }
+    const promise = apiClient.get('/dashboard/stats')
+      .then((res) => {
+        statsCache = res;
+        statsCacheTime = Date.now();
+        return res;
+      })
+      .finally(() => {
+        statsInFlight = null;
+      });
+    statsInFlight = promise;
+    return promise;
   },
 
   // --- Phase 3: Activity Timeline ---

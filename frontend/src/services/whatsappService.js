@@ -1,10 +1,23 @@
 import { apiClient } from './api.js';
 
+let groupsCache = null;
+let groupsCacheTime = 0;
+let groupsInFlight = null;
+const GROUPS_TTL = 30000;
+
 /**
  * Frontend service for WhatsApp integration, group monitoring, and task drafts.
  * All calls go to the authenticated backend — no tokens or WhatsApp secrets are handled here.
  */
 export const whatsappService = {
+  /**
+   * Invalidate cached groups list
+   */
+  invalidateGroupsCache() {
+    groupsCache = null;
+    groupsCacheTime = 0;
+  },
+
   /**
    * Fetch current WhatsApp provider diagnostics
    */
@@ -41,13 +54,31 @@ export const whatsappService = {
    * Fetch WhatsApp groups accessible to Baileys with monitoring status
    */
   getGroups() {
-    return apiClient.get('/whatsapp/groups');
+    const now = Date.now();
+    if (groupsCache && (now - groupsCacheTime < GROUPS_TTL)) {
+      return Promise.resolve(groupsCache);
+    }
+    if (groupsInFlight) {
+      return groupsInFlight;
+    }
+    const promise = apiClient.get('/whatsapp/groups')
+      .then((res) => {
+        groupsCache = res;
+        groupsCacheTime = Date.now();
+        return res;
+      })
+      .finally(() => {
+        groupsInFlight = null;
+      });
+    groupsInFlight = promise;
+    return promise;
   },
 
   /**
    * Toggle monitoring on a specific group
    */
   toggleMonitoredGroup(payload) {
+    whatsappService.invalidateGroupsCache();
     return apiClient.post('/whatsapp/monitored-groups', payload);
   },
 
