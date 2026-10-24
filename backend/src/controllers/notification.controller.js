@@ -71,13 +71,42 @@ export const notificationController = {
   },
 
   /**
+   * Get single notification by ID
+   * GET /api/notifications/:id
+   */
+  getNotificationById: async (req, res, next) => {
+    const { id } = req.params;
+    try {
+      if (!mongoose.isValidObjectId(id)) {
+        return next(new AppError('Invalid notification ID format.', 400));
+      }
+      const notification = await Notification.findOne({
+        _id: id,
+        recipient: req.user._id
+      });
+      if (!notification) {
+        return next(new AppError('Notification not found or access denied.', 404));
+      }
+      res.status(200).json({
+        status: 'success',
+        data: { notification: notification.toJSON() }
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  /**
    * Mark a single notification as read
-   * PATCH /api/notifications/:id/read
+   * PATCH /api/notifications/:id/read or PATCH /api/notifications/:id
    */
   markAsRead: async (req, res, next) => {
     const { id } = req.params;
 
     try {
+      if (!mongoose.isValidObjectId(id)) {
+        return next(new AppError('Invalid notification ID format.', 400));
+      }
       // Must belong to authenticated user
       const notification = await Notification.findOne({
         _id: id,
@@ -85,7 +114,12 @@ export const notificationController = {
       });
 
       if (!notification) {
-        return next(new AppError('Notification not found or access denied.', 404));
+        // Return idempotent success if notification is already removed or missing
+        return res.status(200).json({
+          status: 'success',
+          message: 'Notification already dismissed or read.',
+          data: { notification: null }
+        });
       }
 
       notification.isRead = true;
@@ -131,13 +165,21 @@ export const notificationController = {
     const { id } = req.params;
 
     try {
+      if (!mongoose.isValidObjectId(id)) {
+        return next(new AppError('Invalid notification ID format.', 400));
+      }
+
       const notification = await Notification.findOne({
         _id: id,
         recipient: req.user._id
       });
 
       if (!notification) {
-        return next(new AppError('Notification not found or access denied.', 404));
+        // Idempotent delete: if already removed or not found, return success so frontend does not produce 404 console errors
+        return res.status(200).json({
+          status: 'success',
+          message: 'Notification already deleted.'
+        });
       }
 
       await Notification.deleteOne({ _id: notification._id });

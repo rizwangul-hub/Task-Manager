@@ -20,8 +20,12 @@ router.patch('/mark-all-read', notificationController.markAllAsRead);
 // List notifications with pagination and unread filter
 router.get('/', notificationController.getNotifications);
 
-// Mark single notification as read
+// Get single notification
+router.get('/:id', notificationController.getNotificationById);
+
+// Mark single notification as read (supports both /:id and /:id/read)
 router.patch('/:id/read', notificationController.markAsRead);
+router.patch('/:id', notificationController.markAsRead);
 
 // Delete single notification
 router.delete('/:id', notificationController.deleteNotification);
