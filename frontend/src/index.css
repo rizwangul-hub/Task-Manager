@@ -149,12 +149,19 @@ body {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  background: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
   flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.brand-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .brand-info {
@@ -1644,16 +1651,23 @@ body {
 }
 
 .login-logo-mark {
-  width: 52px;
-  height: 52px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-  color: #ffffff;
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  background: #ffffff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 12px;
-  box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 4px 14px rgba(1, 21, 61, 0.12);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  overflow: hidden;
+}
+
+.login-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .login-brand-title {
@@ -5508,3 +5522,288 @@ body {
 .text-amber {
   color: #d97706 !important;
 }
+
+/* ==========================================================================
+   PWA Installation UI & iOS Installation Guide
+   ========================================================================== */
+
+.pwa-install-card {
+  position: relative;
+  margin-top: 18px;
+  padding: 14px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease-in-out;
+}
+
+.pwa-install-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.pwa-dismiss-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pwa-dismiss-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.pwa-install-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pwa-logo-wrapper {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 6px rgba(1, 21, 61, 0.08);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pwa-card-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pwa-content-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.pwa-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.pwa-app-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.pwa-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid #bfdbfe;
+  letter-spacing: 0.02em;
+}
+
+.pwa-app-description {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0 0 10px 0;
+  line-height: 1.35;
+}
+
+.pwa-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pwa-install-button {
+  background: #011547 !important;
+  color: #ffffff !important;
+  font-size: 12px !important;
+  padding: 6px 14px !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 6px rgba(1, 21, 61, 0.25) !important;
+}
+
+.pwa-install-button:hover {
+  background: #011d61 !important;
+}
+
+.pwa-installed-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #16a34a;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+
+.pwa-manual-instructions {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #1e40af;
+  line-height: 1.4;
+}
+
+/* iOS Guide Modal */
+.ios-install-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.ios-install-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.ios-hero-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(1, 21, 61, 0.1);
+  object-fit: contain;
+}
+
+.ios-hero-info {
+  flex: 1;
+}
+
+.ios-hero-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.ios-hero-sub {
+  font-size: 12px;
+  color: #64748b;
+  margin: 2px 0 0 0;
+}
+
+.ios-safari-warning {
+  display: flex;
+  gap: 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #92400e;
+  font-size: 12px;
+}
+
+.safari-warning-icon {
+  color: #d97706;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.safari-warning-text strong {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.safari-warning-text p {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.ios-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ios-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.ios-step-number {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #011547;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ios-step-content {
+  flex: 1;
+}
+
+.ios-step-label {
+  font-size: 13px;
+  color: #0f172a;
+  margin-bottom: 2px;
+}
+
+.ios-step-desc {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0 0 8px 0;
+  line-height: 1.35;
+}
+
+.ios-step-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.ios-install-footer {
+  margin-top: 4px;
+}
+

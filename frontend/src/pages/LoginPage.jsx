@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../hooks/useToast';
 import FormField from '../components/ui/FormField';
 import Button from '../components/ui/Button';
+import PwaInstallCard from '../components/pwa/PwaInstallCard';
 import { Sparkles, Eye, EyeOff, LogIn, AlertCircle, Server } from 'lucide-react';
 
 export const LoginPage = () => {
@@ -58,7 +59,7 @@ export const LoginPage = () => {
         {/* Brand Header */}
         <div className="login-header">
           <div className="login-logo-mark">
-            <Sparkles size={28} />
+            <img src="/logo.png" alt="Task Manager Logo" className="login-logo-img" />
           </div>
           <h1 className="login-brand-title">Task Manager</h1>
           <p className="login-brand-subtitle">by PixxTechnologies</p>
@@ -131,6 +132,8 @@ export const LoginPage = () => {
             Sign In
           </Button>
         </form>
+
+        <PwaInstallCard />
 
         <div className="login-footer">
           <p className="login-security-notice">

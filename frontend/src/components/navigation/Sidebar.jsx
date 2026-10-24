@@ -56,7 +56,7 @@ export const Sidebar = ({
         <div className="sidebar-brand">
           <div className="brand-logo-container">
             <div className="brand-logo-mark">
-              <Sparkles size={20} className="brand-logo-icon" />
+              <img src="/pwa-192x192.png" alt="Task Manager Logo" className="brand-logo-img" />
             </div>
             {!isCollapsed && (
               <div className="brand-info">
