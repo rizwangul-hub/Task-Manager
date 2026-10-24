@@ -10,6 +10,7 @@ import EmptyState from '../components/ui/EmptyState';
 import ErrorState from '../components/ui/ErrorState';
 import { whatsappService } from '../services/whatsappService';
 import { projectService } from '../services/projectService';
+import { contactService } from '../services/contactService';
 import { socketService } from '../services/socket';
 import { useToast } from '../hooks/useToast';
 import {
@@ -63,8 +64,10 @@ export const WhatsAppInboxPage = () => {
   const [selectedGroup, setSelectedGroup] = useState('');
   const [groups, setGroups] = useState([]);
 
-  // Projects for dropdown
+  // Projects and Contacts for dropdown
   const [projects, setProjects] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [editContactId, setEditContactId] = useState('');
 
   // Review Modal State
   const [selectedDraft, setSelectedDraft] = useState(null);
@@ -94,6 +97,13 @@ export const WhatsAppInboxPage = () => {
       .getProjects({ limit: 100 })
       .then((res) => {
         setProjects(res.data?.projects || []);
+      })
+      .catch(() => {});
+
+    contactService
+      .getContacts({ status: 'all' })
+      .then((res) => {
+        setContacts(res.data?.contacts || []);
       })
       .catch(() => {});
   }, []);
@@ -177,11 +187,32 @@ export const WhatsAppInboxPage = () => {
         draft.aiExtraction?.assigneeName ||
         ''
     );
-    setEditAssigneePhone(
+    const rawAssigneeName = (
+      draft.editableFields?.assigneeName ||
+        draft.aiExtraction?.assigneeName ||
+        ''
+    ).trim();
+    const rawAssigneePhone = (
       draft.editableFields?.assigneePhone ||
         draft.aiExtraction?.assigneePhone ||
         ''
-    );
+    ).trim();
+    setEditAssigneeName(rawAssigneeName);
+    setEditAssigneePhone(rawAssigneePhone);
+
+    const normName = rawAssigneeName.toLowerCase();
+    const cleanPhone = rawAssigneePhone.replace(/\D/g, '');
+    let matchedContact = null;
+    if (cleanPhone) {
+      matchedContact = contacts.find((c) => (c.whatsappNumber || '').replace(/\D/g, '').endsWith(cleanPhone.slice(-9)));
+    }
+    if (!matchedContact && normName) {
+      matchedContact = contacts.find((c) => {
+        const fn = (c.fullName || '').toLowerCase();
+        return fn === normName || fn.includes(normName) || normName.includes(fn);
+      });
+    }
+    setEditContactId(matchedContact ? matchedContact._id : '');
     setModalOpen(true);
   };
 
@@ -208,6 +239,7 @@ export const WhatsAppInboxPage = () => {
         title: editTitle.trim(),
         description: editDescription.trim(),
         projectId: editProjectId,
+        contactId: editContactId || null,
         priority: editPriority,
         startDate: editStartDate ? new Date(editStartDate).toISOString() : null,
         dueDate: editDueDate ? new Date(editDueDate).toISOString() : null,
@@ -911,6 +943,41 @@ export const WhatsAppInboxPage = () => {
                 onChange={(e) => setEditDueDate(e.target.value)}
                 helperText={selectedDraft.aiExtraction?.dateInterpretation || ''}
               />
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label className="form-label" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>
+                Assigned Contact (WhatsApp Notifications)
+              </label>
+              <select
+                className="form-input"
+                value={editContactId}
+                onChange={(e) => {
+                  const chosenId = e.target.value;
+                  setEditContactId(chosenId);
+                  const found = contacts.find((c) => c._id === chosenId);
+                  if (found) {
+                    setEditAssigneeName(found.fullName);
+                    if (found.whatsappNumber) setEditAssigneePhone(found.whatsappNumber);
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border-color, #cbd5e1)'
+                }}
+              >
+                <option value="">Unassigned (or enter custom name below)</option>
+                {contacts.filter((c) => c.isActive).map((c) => (
+                  <option key={c._id} value={c._id}>
+                    {c.fullName} ({c.whatsappNumber})
+                  </option>
+                ))}
+              </select>
+              <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
+                Select a team contact to link the task and deliver WhatsApp deadline reminders.
+              </p>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>

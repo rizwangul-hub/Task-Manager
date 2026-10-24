@@ -533,30 +533,72 @@ export const whatsappDraftController = {
       let assignedUserIds = [req.user._id];
       let assignedContactId = null;
 
+      const directContactId = req.body?.contactId || req.body?.assignedContact || req.body?.assignedContactId;
       if (req.body?.assigneeId && mongoose.isValidObjectId(req.body.assigneeId)) {
         const userExists = await User.findById(req.body.assigneeId);
         if (userExists) {
           assignedUserIds = [userExists._id];
         }
-      } else if (req.body?.contactId && mongoose.isValidObjectId(req.body.contactId)) {
-        const contactExists = await Contact.findById(req.body.contactId);
+      }
+
+      if (directContactId && mongoose.isValidObjectId(directContactId)) {
+        const contactExists = await Contact.findById(directContactId);
         if (contactExists) {
           assignedContactId = contactExists._id;
         }
-      } else {
+      }
+
+      if (!assignedContactId) {
         const candidateName = (
+          req.body?.assigneeName ||
+          req.body?.assignee ||
           draft.editableFields?.assigneeName ||
           draft.aiExtraction?.assigneeName ||
           ''
         ).trim();
-        if (candidateName) {
-          const matchedUser = await User.findOne({ name: new RegExp(`^${candidateName}$`, 'i'), isActive: true });
-          if (matchedUser) {
-            assignedUserIds = [matchedUser._id];
+        const candidatePhone = (
+          req.body?.assigneePhone ||
+          draft.editableFields?.assigneePhone ||
+          draft.aiExtraction?.assigneePhone ||
+          ''
+        ).trim();
+
+        if (candidatePhone) {
+          const cleanPhone = candidatePhone.replace(/[\s\-\(\)\+]/g, '');
+          if (cleanPhone) {
+            const matchedByPhone = await Contact.findOne({
+              whatsappNumber: new RegExp(cleanPhone.slice(-9), 'i'),
+              isActive: true
+            });
+            if (matchedByPhone) {
+              assignedContactId = matchedByPhone._id;
+            }
+          }
+        }
+
+        if (!assignedContactId && candidateName) {
+          const escaped = candidateName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const matchedContactExact = await Contact.findOne({
+            fullName: new RegExp(`^${escaped}$`, 'i'),
+            isActive: true
+          });
+          if (matchedContactExact) {
+            assignedContactId = matchedContactExact._id;
           } else {
-            const matchedContact = await Contact.findOne({ fullName: new RegExp(`^${candidateName}$`, 'i'), isActive: true });
-            if (matchedContact) {
-              assignedContactId = matchedContact._id;
+            const matchedContactWord = await Contact.findOne({
+              fullName: new RegExp(`\\b${escaped}\\b`, 'i'),
+              isActive: true
+            });
+            if (matchedContactWord) {
+              assignedContactId = matchedContactWord._id;
+            } else {
+              const matchedUser = await User.findOne({
+                name: new RegExp(`^${escaped}$`, 'i'),
+                isActive: true
+              });
+              if (matchedUser) {
+                assignedUserIds = [matchedUser._id];
+              }
             }
           }
         }
@@ -659,7 +701,20 @@ export const whatsappDraftController = {
       const populatedTask = await Task.findById(newTask._id)
         .populate('project', 'name projectKey')
         .populate('creator', 'name email')
-        .populate('assignees', 'name email role');
+        .populate('assignees', 'name email role')
+        .populate('assignedContact', 'fullName whatsappNumber email jobTitle isActive');
+
+      if (assignedContactId) {
+        try {
+          const contactDoc = await Contact.findById(assignedContactId);
+          if (contactDoc) {
+            const { taskAssignmentNotificationService } = await import('../services/taskAssignmentNotification.service.js');
+            await taskAssignmentNotificationService.enqueue(populatedTask, contactDoc);
+          }
+        } catch (notifErr) {
+          // Non-blocking notification error
+        }
+      }
 
       // Real-time notification
       socketService.broadcast('task:created', populatedTask.toJSON());
