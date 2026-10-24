@@ -3,15 +3,17 @@ import { Project } from '../models/project.model.js';
 import { logger } from '../utils/logger.js';
 
 const GREETINGS_AND_CASUAL = [
-  /^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening|salam|assalam|aaoa)(\s+(all|everyone|guys|team|there))?[!.,\s]*$/i,
-  /^(thanks|thank\s+you(\s+so\s+much|\s+a\s+lot)?|thx|ty|ok|okay|k|noted|seen|great|cool|awesome|done|perfect|yes|no|yup|nope|got\s+it)[!.,\s]*$/i,
-  /^(how\s+are\s+you(\s+doing)?|what'?s\s+up|how'?s\s+it\s+going)[!.,?\s]*$/i
+  /^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening|salam|assalam|aaoa|namaste)(\s+(all|everyone|guys|team|there))?[!.,\s]*$/i,
+  /^(thanks|thank\s+you(\s+so\s+much|\s+a\s+lot)?|thx|ty|ok|okay|k|noted|seen|great|cool|awesome|done|perfect|yes|no|yup|nope|got\s+it|theek\s+hai|shukriya|accha|acha)[!.,\s]*$/i,
+  /^(how\s+are\s+you(\s+doing)?|what'?s\s+up|how'?s\s+it\s+going|kya\s+haal|kese\s+ho|kaise\s+ho)[!.,?\s]*$/i,
+  /^(where\s+are\s+you|are\s+you\s+(free|busy|available|there)|can\s+you\s+talk|can\s+we\s+talk|did\s+you\s+(reach|eat)|kahan\s+ho|free\s+ho|baat\s+ho\s+sakti)[!.,?\s]*$/i,
+  /^(call\s+me(\s+back)?|call\s+when\s+free|please\s+call|pick\s+up|give\s+me\s+a\s+call|call\s+karo|mujhe\s+call)[!.,?\s]*$/i
 ];
 
 const ACTION_VERBS = [
   'update', 'finish', 'complete', 'prepare', 'create', 'make', 'send', 'upload',
   'fix', 'check', 'review', 'verify', 'submit', 'inspect', 'reconcile', 'draft',
-  'call', 'email', 'organize', 'clean', 'investigate', 'resolve', 'process', 'pay'
+  'email', 'organize', 'clean', 'investigate', 'resolve', 'process', 'pay', 'schedule'
 ];
 
 const ACTION_INDICATORS = [
@@ -348,10 +350,18 @@ export async function callGemini(apiKey, text, context, options = {}) {
     : [...new Set([primaryModel, 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'])].filter(Boolean);
 
   const isVoice = Boolean(context.audio?.buffer);
-  const prompt = `You are an AI assistant in a task management system.
+  const prompt = `You are a strict task classification and extraction AI for a project management system.
 ${isVoice ? 'The user sent a WhatsApp voice message / audio note. Listen carefully to the voice note (it may be spoken in English, Urdu, Hindi, or conversational mix).' : 'Analyze the following WhatsApp message received in a team group or direct chat.'}
-Decide if the message is an actionable work task or instruction.
-If it is casual chit-chat, a greeting, joke, or announcement with no actionable task, return isTask: false.
+
+CRITICAL TASK CLASSIFICATION RULES:
+1. ONLY set isTask: true if the message contains a CLEAR, EXPLICIT WORK TASK, DELEGATION, OR INSTRUCTION to perform work (e.g. "prepare the proposal", "fix the login page", "update the database", "submit the report by tomorrow").
+2. STRICTLY SET isTask: false for:
+   - Casual conversation, personal chatter, or greetings ("hi", "how are you", "salam", "good morning").
+   - Questions about availability, whereabouts, or routine status ("where are you", "are you free", "can you talk", "did you reach?").
+   - Routine communication requests ("call me", "call when free", "pick up the phone", "let me know").
+   - Acknowledgements, thanks, or simple remarks ("ok", "noted", "seen", "thanks", "will do later", "working on it").
+   - Personal plans ("let's meet for lunch", "going home now").
+3. When in doubt or if the message is ambiguous casual chatting, ALWAYS set isTask: false with confidence: 0.
 
 Reference message timestamp: ${context.messageTimestamp.toISOString()}
 Sender: ${context.senderName || 'Unknown'}
@@ -362,8 +372,8 @@ ${isVoice ? 'Listen to the audio content provided in the attachment.' : `Input W
 Return ONLY a valid JSON object matching this schema:
 {
   "isTask": boolean,
-  "title": string (concise actionable title, max 100 chars),
-  "description": string (clear instructions${isVoice ? ' including complete speech transcription' : ' based strictly on message content'}),
+  "title": string (concise actionable title, max 100 chars, or empty string if not a task),
+  "description": string (clear instructions${isVoice ? ' including complete speech transcription' : ' based strictly on message content'}, or empty string if not a task),
   "assigneeName": string or null (name of the person asked to do the task, only if clearly stated in the message),
   "assigneePhone": string or null (never invent, leave null if not provided),
   "priority": "Low" | "Medium" | "High" | "Urgent",
@@ -371,7 +381,7 @@ Return ONLY a valid JSON object matching this schema:
   "projectName": string or null (matching title from available projects only if confident),
   "projectId": string or null (matching id from available projects only if confident),
   "confidence": number between 0 and 1,
-  "reason": string (brief justification for whether this is a task or not),
+  "reason": string (brief explanation of whether this is a genuine work task or casual chat),
   "missingInformation": array of strings (ambiguous details that require manual confirmation)
 }`;
 

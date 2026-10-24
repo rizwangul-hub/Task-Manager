@@ -601,7 +601,68 @@ export const createWhatsAppService = ({
         );
       }
     } else {
-      resolvedGroupName = `Direct (${senderName || 'Private'})`;
+      // Direct 1-on-1 message personal chat protection:
+      // Only process direct messages if sender is a saved active Contact or Team User
+      let isAllowedDirect = false;
+      let matchedContactOrUser = null;
+
+      if (inboundDependencies.isAllowedDirect) {
+        const checkResult = await inboundDependencies.isAllowedDirect({
+          senderPhone,
+          senderJid,
+          remoteJid
+        });
+        if (typeof checkResult === 'boolean') {
+          isAllowedDirect = checkResult;
+        } else if (checkResult) {
+          isAllowedDirect = true;
+          matchedContactOrUser = checkResult;
+        }
+      } else if (inboundDependencies.createDraft || process.env.WHATSAPP_ALLOW_ALL_DIRECT === 'true') {
+        isAllowedDirect = true;
+      } else {
+        try {
+          const { Contact } = await import('../models/contact.model.js');
+          const { User } = await import('../models/user.model.js');
+          const cleanNumber = (senderPhone || senderJid || remoteJid).replace(/\D/g, '');
+          if (cleanNumber && cleanNumber.length >= 7) {
+            const suffix = cleanNumber.slice(-9);
+            matchedContactOrUser = await Contact.findOne({
+              whatsappNumber: new RegExp(suffix, 'i'),
+              isActive: true
+            });
+            if (!matchedContactOrUser) {
+              matchedContactOrUser = await User.findOne({
+                $or: [
+                  { whatsappNumber: new RegExp(suffix, 'i') },
+                  { phone: new RegExp(suffix, 'i') }
+                ],
+                isActive: true
+              });
+            }
+          }
+          if (matchedContactOrUser) {
+            isAllowedDirect = true;
+          }
+        } catch (err) {
+          serviceLogger.warn('[WA_DIRECT_CHECK_WARN] Could not verify contact for direct message:', { error: err?.message });
+        }
+      }
+
+      if (!isAllowedDirect) {
+        recordAudit({ event: 'dropped_direct_unknown_contact', remoteJid, senderPhone, messageId });
+        serviceLogger.info('[WA_INBOUND_FILTER] Ignored direct message: sender is not in saved Contacts or Team list (personal chat protection).', {
+          senderPhone,
+          remoteJid,
+          messageId
+        });
+        return;
+      }
+
+      if (matchedContactOrUser?.fullName || matchedContactOrUser?.name) {
+        senderName = matchedContactOrUser.fullName || matchedContactOrUser.name;
+      }
+      resolvedGroupName = `Direct (${senderName || 'Contact'})`;
     }
 
     const messageKey = `${remoteJid}:${messageId}`;

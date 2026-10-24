@@ -1234,3 +1234,82 @@ test('32. Inbound messages from boss with protobuf Long timestamp object and @li
   assert.equal(drafts[1].status, 'awaiting_review');
   await service.close();
 });
+
+test('33. Direct 1-on-1 personal chat protection: unknown sender is ignored while saved contact creates draft', async () => {
+  const drafts = [];
+  let socketHandler;
+  const service = createWhatsAppService({
+    authInfoPath: 'backend/test-auth-contact-filter',
+    authStateFactory: async () => ({
+      state: { creds: {}, keys: {} },
+      saveCreds: async () => {}
+    }),
+    socketFactory: () => ({
+      ws: { readyState: 1 },
+      user: { id: '923255984244:7@s.whatsapp.net', name: 'Fahad' },
+      ev: {
+        on(evt, handler) {
+          if (evt === 'messages.upsert') socketHandler = handler;
+        },
+        removeAllListeners() {}
+      },
+      emit(evt, payload) {
+        if (evt === 'messages.upsert') socketHandler?.(payload);
+      },
+      end() {}
+    }),
+    inboundDependencies: {
+      getCheckpoint: async () => new Date('2026-10-16T03:30:00.000Z'),
+      findDraft: async () => null,
+      isAllowedDirect: async ({ senderPhone }) => {
+        // Only allow registered boss number (+447880716972)
+        if (senderPhone && senderPhone.includes('447880716972')) {
+          return { fullName: 'Boss UK' };
+        }
+        return false;
+      },
+      createDraft: async (data) => {
+        drafts.push(data);
+        return data;
+      },
+      extractTask: async () => ({
+        extraction: { isTask: true, title: 'Prepare client invoices', confidence: 0.95 },
+        provider: 'gemini'
+      }),
+      broadcastDraft: async () => {}
+    },
+    serviceLogger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.initialize();
+  const socket = service.getSocket();
+
+  // 1. Casual personal chat from unknown number (friend/relative) -> should be IGNORED
+  const personalMsg = {
+    key: { id: 'personal-dm-1', remoteJid: '923119999999@s.whatsapp.net', fromMe: false },
+    pushName: 'Friend',
+    messageTimestamp: Math.floor(new Date('2026-10-16T03:55:00.000Z').getTime() / 1000),
+    message: { conversation: 'Please call me when you reach home' }
+  };
+
+  // 2. Direct message from saved Boss -> should create draft
+  const bossMsg = {
+    key: { id: 'boss-dm-2', remoteJid: '447880716972@s.whatsapp.net', fromMe: false },
+    pushName: 'Boss',
+    messageTimestamp: Math.floor(new Date('2026-10-16T03:56:00.000Z').getTime() / 1000),
+    message: { conversation: 'Fahad please prepare the client invoices by tomorrow.' }
+  };
+
+  socket.emit('messages.upsert', {
+    type: 'notify',
+    messages: [personalMsg, bossMsg]
+  });
+  await service.waitForInboundProcessing();
+
+  assert.equal(drafts.length, 1, 'Only the saved Boss direct message should create a draft');
+  assert.equal(drafts[0].senderName, 'Boss UK');
+  assert.equal(drafts[0].groupName, 'Direct (Boss UK)');
+  assert.equal(drafts[0].aiExtraction.title, 'Prepare client invoices');
+  await service.close();
+});
+
