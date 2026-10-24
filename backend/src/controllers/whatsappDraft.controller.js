@@ -526,7 +526,7 @@ export const whatsappDraftController = {
         count += 1;
         keyCandidate = `${prefix}-${count + 1}`;
       }
-      taskKey = keyCandidate;
+      const taskKey = keyCandidate;
 
       let assignedUserIds = [req.user._id];
       let assignedContactId = null;

@@ -28,7 +28,8 @@ const taskEventSchema = new mongoose.Schema(
     project: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Project',
-      required: [true, 'Project reference is required']
+      required: false,
+      default: null
     },
     user: {
       type: mongoose.Schema.Types.ObjectId,
