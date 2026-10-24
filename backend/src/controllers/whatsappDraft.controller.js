@@ -497,6 +497,13 @@ export const whatsappDraftController = {
         draft.aiExtraction?.priority ||
         TASK_PRIORITIES.MEDIUM;
 
+      const effectiveBusinessCategory = (
+        req.body?.businessCategory ||
+        draft.editableFields?.businessCategory ||
+        draft.aiExtraction?.businessCategory ||
+        'NEEDS_REVIEW'
+      ).trim();
+
       const effectiveStartDate =
         req.body?.startDate !== undefined
           ? (req.body.startDate ? new Date(req.body.startDate) : null)
@@ -609,6 +616,7 @@ export const whatsappDraftController = {
         startDate: effectiveStartDate,
         dueDate: effectiveDueDate,
         source: TASK_SOURCES.WHATSAPP,
+        businessCategory: effectiveBusinessCategory,
         whatsappMessageId: draft.messageId,
         whatsappDraftId: draft._id,
         previewImage: draft.previewImage?.url ? draft.previewImage : (draft.attachments?.[0]?.url ? { publicId: draft.attachments[0].publicId || '', url: draft.attachments[0].url } : { publicId: '', url: '' }),
@@ -637,6 +645,7 @@ export const whatsappDraftController = {
           messageTimestamp: draft.messageTimestamp,
           rawMessageText: draft.rawMessageText,
           draftId: draft._id,
+          businessCategory: effectiveBusinessCategory,
           aiModelUsed: draft.aiExtraction?.modelUsed || draft.extractorProvider || 'gemini',
           reason: draft.aiExtraction?.reason || '',
           approvedBy: req.user.name || req.user.email,

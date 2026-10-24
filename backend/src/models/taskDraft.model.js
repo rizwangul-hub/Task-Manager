@@ -75,6 +75,11 @@ const taskDraftSchema = new mongoose.Schema(
       dueDate: { type: Date, default: null },
       dateInterpretation: { type: String, default: '' },
       sourceSender: { type: String, default: '' },
+      businessCategory: {
+        type: String,
+        default: 'NEEDS_REVIEW',
+        trim: true
+      },
       reason: { type: String, default: '', trim: true },
       missingInformation: [{ type: String, trim: true }],
       modelUsed: { type: String, default: '' }
@@ -86,6 +91,7 @@ const taskDraftSchema = new mongoose.Schema(
       assigneePhone: { type: String, default: undefined, trim: true },
       projectName: { type: String, default: undefined, trim: true },
       projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: undefined },
+      businessCategory: { type: String, default: undefined, trim: true },
       priority: {
         type: String,
         enum: ['Low', 'Medium', 'High', 'Urgent'],

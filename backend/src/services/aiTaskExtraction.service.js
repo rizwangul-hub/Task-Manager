@@ -2,12 +2,171 @@ import mongoose from 'mongoose';
 import { Project } from '../models/project.model.js';
 import { logger } from '../utils/logger.js';
 
+export const BUSINESS_CATEGORIES = [
+  'PAK_PROPERTY',
+  'PAK_FINANCE_EXPENSES',
+  'UK_PROPERTY',
+  'UK_PROPERTY_FINANCE',
+  'UK_PROPERTY_MAINTENANCE_COMPLIANCE',
+  'UK_BICYCLE_SHOPS',
+  'ROTA_ATTENDANCE',
+  'ROTA_SCHEDULING',
+  'SOFTWARE_DEVELOPMENT',
+  'IT_SUPPORT',
+  'CLIENT_COMMUNICATION',
+  'MANAGEMENT_REPORTING',
+  'ADMINISTRATION',
+  'OTHER_BUSINESS',
+  'NEEDS_REVIEW'
+];
+
+export const PIXX_BUSINESS_CONTEXT = `# PIX X TECHNOLOGIEES — COMPLETE BUSINESS CONTEXT
+
+1. COMPANY OVERVIEW:
+PixxTechnologiees manages multiple business streams:
+- Pakistani property management, rent, expenses, and financial data verification.
+- UK property management, compliance, and client operations.
+- UK bicycle shop operations and worker attendance through the Rota System.
+- Internal software development, maintenance, automation, and IT infrastructure.
+- Management oversight, employee coordination, and administrative reporting.
+CRITICAL: Do not treat every message as belonging to the same department. Determine the relevant business, project, client, or system from the message content.
+
+2. PAKISTANI PROPERTY BUSINESS AND EXPENSE MANAGEMENT:
+- Operations: Pakistani property records, rent collection, general/unit expenses, cash/bank transactions, financial statements, duplicate expense corrections, staff payroll records, vouchers, and ledgers.
+- Key Personnel:
+  * Fahad Rasheed: Management oversight and business review.
+  * Khurshid Anwar: Operations, administrative verification, and financial system management.
+  * Sarfraz: Data-entry responsibilities in property finance workflow.
+- Relevant Categories: PAK_PROPERTY, PAK_FINANCE_EXPENSES.
+- Note: Never confuse Pakistani property records with UK property transactions.
+
+3. UK PROPERTY BUSINESS AND CLIENT OPERATIONS:
+- Known Property Companies / Projects:
+  * OLD STREET
+  * BEST STANDARD
+  * SK HAMILTON
+  * HOMEWARDS
+  * MILE END ROAD LTD
+  * GLOBAL STANDARD
+- Operations: Property records, rent/mortgage transactions, financial ledgers, service charges, ground rent, insurance tracking, compliance certificates (gas safety, electrical safety, appliance warranties), document renewals, client inquiries, and maintenance follow-ups.
+- Relevant Categories: UK_PROPERTY, UK_PROPERTY_FINANCE, UK_PROPERTY_MAINTENANCE_COMPLIANCE, CLIENT_COMMUNICATION.
+
+4. UK BICYCLE SHOP OPERATIONS — ROTA SYSTEM:
+- Known Bicycle Shops:
+  * Station
+  * Camden
+  * Chelsea
+  * Edgware
+  * Southwark
+  * Leebridge
+- Operations: Worker attendance, shift coordination, weekly rota creation, worker allocation, checking missing attendance, managing availability/unavailability/half-days, reviewing late arrivals, and attendance reports (PDF/Excel).
+- Rules: Attendance is separate from wages/payroll (never expose wages to workers); do not assign a worker to multiple shops on the same date.
+- Relevant Categories: UK_BICYCLE_SHOPS, ROTA_ATTENDANCE, ROTA_SCHEDULING.
+
+5. INTERNAL SOFTWARE DEVELOPMENT AND IT OPERATIONS:
+- Known Systems: Property finance and expense tracker, UK property management system, Bicycle worker attendance and rota system, AI WhatsApp Task Manager, internal web & mobile applications (PWA/WebView), CCTV snapshot/photo verification, database, cloud hosting, APIs, and authentication.
+- Operations: Bug fixes, UI improvements, API testing, database backups, WhatsApp integration fixes, deployment maintenance, and technical error investigations.
+- Relevant Categories: SOFTWARE_DEVELOPMENT, IT_SUPPORT.
+- Distinguish: "Fix expense tracker login" is SOFTWARE_DEVELOPMENT; "verify expense entries in tracker" is PAK_FINANCE_EXPENSES or UK_PROPERTY_FINANCE.
+
+6. MANAGEMENT AND EMPLOYEE RESPONSIBILITIES:
+- Fahad Rasheed: Primary manager, executive decisions, business reports, project oversight.
+- Khurshid Anwar: Operations, administrative tasks, data verification, financial reconciliation.
+- Sarfraz: Data entry for property finance, entering expenses/rents, completing assigned ledger tasks.
+- Bicycle shop workers, developers, and staff: identified via contacts and message context.
+
+7. LANGUAGE & LOCALIZATION (URDU / ROMAN URDU / ENGLISH):
+Accurately interpret English, Urdu, and Roman Urdu instructions:
+- "Fahad bhai, UK property ka report kal tak ready kar dein" -> Assignee: Fahad Rasheed, Category: UK_PROPERTY, DueDate: tomorrow.
+- "Khurshid, Sarfraz ki October entries verify kar den" -> Assignee: Khurshid Anwar, Category: PAK_FINANCE_EXPENSES, Title: "Verify Sarfraz's October property expense entries".
+- "Station shop ka next week rota bana do" -> Category: ROTA_SCHEDULING, Title: "Prepare next week rota for Station shop".
+- "Expense tracker ka login kaam nahi kar raha, please fix karo" -> Category: SOFTWARE_DEVELOPMENT, Title: "Fix login issue in expense tracker".
+- "Alhamdulillah, report complete ho gayi" -> Not a new task (it is an acknowledgement/status report).
+
+8. OPERATIONAL CONSTRAINTS:
+- TASK TRACKING ONLY: Creating a task draft NEVER executes financial transactions, modifies official attendance databases, or pays money. It creates a task draft for human tracking and review.
+- ACCURACY: Never invent worker names, property names, financial amounts, or deadlines that are not in the message.
+- AVOID FALSE POSITIVES: Mere mentions of names, greetings ("salam", "hi"), questions ("where are you"), or acknowledgements ("done", "ok") must strictly have isTask: false.`;
+
+export function detectBusinessCategory(text, defaultCategory = 'NEEDS_REVIEW') {
+  const lower = (text || '').toLowerCase();
+  
+  // Software Development / IT
+  if (
+    /\b(bug|fix|login|error|crash|api|database|mongodb|server|hosting|backup|deployment|code|feature|endpoint|decrypt|decryption|pwa|webview|ui|frontend|backend)\b/i.test(lower) ||
+    lower.includes('expense tracker login') ||
+    lower.includes('task manager') ||
+    lower.includes('not working') ||
+    lower.includes('kaam nahi kar raha')
+  ) {
+    if (/\b(it\s+support|access|password|permission|wifi)\b/i.test(lower)) {
+      return 'IT_SUPPORT';
+    }
+    return 'SOFTWARE_DEVELOPMENT';
+  }
+
+  // Rota System / Bicycle Shops
+  const isShop = /\b(station|camden|chelsea|edgware|southwark|leebridge|bicycle|shop)\b/i.test(lower);
+  const isRota = /\b(rota|shift|schedule|shift\s+timing)\b/i.test(lower);
+  const isAttendance = /\b(attendance|present|absent|late\s+arrival|late|overtime|time-in|time-out)\b/i.test(lower);
+
+  if (isRota || (isShop && lower.includes('rota'))) {
+    return 'ROTA_SCHEDULING';
+  }
+  if (isAttendance || (isShop && lower.includes('attendance'))) {
+    return 'ROTA_ATTENDANCE';
+  }
+  if (isShop) {
+    return 'UK_BICYCLE_SHOPS';
+  }
+
+  // UK Property
+  const isUkCompany = /\b(old\s+street|best\s+standard|sk\s+hamilton|homewards|mile\s+end|global\s+standard|uk\s+property)\b/i.test(lower);
+  const isUkCompliance = /\b(gas\s+safety|gas\s+cert|electrical\s+safety|epc|certificate|expiry|expire|renew|renewal|warranty|insurance|compliance|inspection)\b/i.test(lower);
+  const isUkFinance = /\b(mortgage|ground\s+rent|service\s+charge|tenancy\s+deposit)\b/i.test(lower);
+
+  if (isUkCompliance || (isUkCompany && isUkCompliance)) {
+    return 'UK_PROPERTY_MAINTENANCE_COMPLIANCE';
+  }
+  if (isUkFinance || (isUkCompany && /\b(expense|rent|statement|ledger|invoice|payment)\b/i.test(lower))) {
+    return 'UK_PROPERTY_FINANCE';
+  }
+  if (isUkCompany) {
+    return 'UK_PROPERTY';
+  }
+
+  // Pakistani Property & Finance
+  const isPakProperty = /\b(pakistani\s+property|pak\s+property|property\s+expense|unit\s+expense|rent\s+collection|tenant\s+deposit|voucher|ledger)\b/i.test(lower) ||
+    lower.includes('sarfraz') ||
+    lower.includes('khurshid');
+
+  if (isPakProperty) {
+    if (/\b(expense|voucher|ledger|entries|verify|payment|bank|cash|duplicate)\b/i.test(lower)) {
+      return 'PAK_FINANCE_EXPENSES';
+    }
+    return 'PAK_PROPERTY';
+  }
+
+  // Management Reporting & Client Communication
+  if (/\b(client\s+proposal|client\s+communication|follow\s+up\s+with\s+client)\b/i.test(lower)) {
+    return 'CLIENT_COMMUNICATION';
+  }
+  if (/\b(management\s+report|monthly\s+report|quarterly\s+report|progress\s+report)\b/i.test(lower)) {
+    return 'MANAGEMENT_REPORTING';
+  }
+
+  return defaultCategory;
+}
+
+
 const GREETINGS_AND_CASUAL = [
   /^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening|salam|assalam|aaoa|namaste)(\s+(all|everyone|guys|team|there))?[!.,\s]*$/i,
   /^(thanks|thank\s+you(\s+so\s+much|\s+a\s+lot)?|thx|ty|ok|okay|k|noted|seen|great|cool|awesome|done|perfect|yes|no|yup|nope|got\s+it|theek\s+hai|shukriya|accha|acha)[!.,\s]*$/i,
   /^(how\s+are\s+you(\s+doing)?|what'?s\s+up|how'?s\s+it\s+going|kya\s+haal|kese\s+ho|kaise\s+ho)[!.,?\s]*$/i,
   /^(where\s+are\s+you|are\s+you\s+(free|busy|available|there)|can\s+you\s+talk|can\s+we\s+talk|did\s+you\s+(reach|eat)|kahan\s+ho|free\s+ho|baat\s+ho\s+sakti)[!.,?\s]*$/i,
-  /^(call\s+me(\s+back)?|call\s+when\s+free|please\s+call|pick\s+up|give\s+me\s+a\s+call|call\s+karo|mujhe\s+call)[!.,?\s]*$/i
+  /^(call\s+me(\s+back)?|call\s+when\s+free|please\s+call|pick\s+up|give\s+me\s+a\s+call|call\s+karo|mujhe\s+call)[!.,?\s]*$/i,
+  /^(alhamdulillah|subhanallah|mashaallah|mashallah|shukar)[!.,\s]*(hai|ho\s+gaya|done|sab\s+theek\s+hai)?[!.,\s]*$/i,
+  /^(?:alhamdulillah|subhanallah|mashaallah|mashallah|shukar)?[!.,\s]*(?:report\s+complete\s+ho\s+gayi|complete\s+ho\s+gayi|kaam\s+ho\s+gaya|done\s+hai|sab\s+theek\s+hai)[!.,\s]*$/i
 ];
 
 const ACTION_VERBS = [
@@ -28,7 +187,10 @@ const ACTION_INDICATORS = [
   /\bdon'?t\s+forget\b/i,
   /\basap\b/i,
   /\burgent\b/i,
-  /\bby\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|eod|end\s+of\s+day)\b/i
+  /\bby\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|eod|end\s+of\s+day)\b/i,
+  /\b(karo|karna|karen|karein|kar\s+do|kar\s+dein|kar\s+den|bana\s+do|bana\s+dein|bhejo|bhej\s+do|bhej\s+dein)\b/i,
+  /\b(ready\s+kar|check\s+kar|verify\s+kar|update\s+kar|fix\s+kar)\b/i,
+  /\b(kal\s+tak|aaj\s+tak|parso\s+tak)\b/i
 ];
 
 /**
@@ -49,6 +211,10 @@ export function validateExtractionOutput(raw, availableProjects = []) {
   let assigneePhone = typeof raw.assigneePhone === 'string' ? raw.assigneePhone.trim().slice(0, 30) : '';
   let projectName = typeof raw.projectName === 'string' ? raw.projectName.trim().slice(0, 150) : '';
   let reason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
+  let businessCategory = 'NEEDS_REVIEW';
+  if (typeof raw.businessCategory === 'string' && BUSINESS_CATEGORIES.includes(raw.businessCategory.trim().toUpperCase())) {
+    businessCategory = raw.businessCategory.trim().toUpperCase();
+  }
   let modelUsed = typeof raw.modelUsed === 'string' ? raw.modelUsed.trim() : '';
 
   // Validate Project ID against available projects
@@ -115,7 +281,8 @@ export function validateExtractionOutput(raw, availableProjects = []) {
     sourceSender,
     reason,
     missingInformation,
-    modelUsed
+    modelUsed,
+    businessCategory
   };
 }
 
@@ -128,13 +295,13 @@ export function parseRelativeDate(text, referenceDate = new Date()) {
   const ref = new Date(referenceDate);
   const dayOfWeekNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   
-  if (lower.includes('today') || lower.includes('eod') || lower.includes('end of day')) {
+  if (lower.includes('today') || lower.includes('eod') || lower.includes('end of day') || lower.includes('aaj') || lower.includes('aaj tak')) {
     const d = new Date(ref);
     d.setHours(18, 0, 0, 0);
     return { date: d, interpretation: `Due by end of day today (${d.toISOString().slice(0, 10)})` };
   }
 
-  if (lower.includes('tomorrow')) {
+  if (lower.includes('tomorrow') || lower.includes('kal') || lower.includes('kal tak')) {
     const d = new Date(ref);
     d.setDate(d.getDate() + 1);
     d.setHours(18, 0, 0, 0);
@@ -186,7 +353,8 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
       dateInterpretation: '',
       sourceSender: senderName,
       reason: 'Voice note received from team member/client. Attached for audio review.',
-      missingInformation: ['Listen to audio recording to confirm task specifics']
+      missingInformation: ['Listen to audio recording to confirm task specifics'],
+      businessCategory: 'NEEDS_REVIEW'
     };
   }
   if (!trimmed) {
@@ -206,6 +374,7 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
       sourceSender: senderName,
       reason: 'Empty message content',
       missingInformation: [],
+      businessCategory: 'NEEDS_REVIEW',
       modelUsed: 'heuristic'
     };
   }
@@ -255,6 +424,7 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
       sourceSender: senderName,
       reason: 'No work instruction or task action detected',
       missingInformation: [],
+      businessCategory: 'NEEDS_REVIEW',
       modelUsed: 'heuristic'
     };
   }
@@ -285,15 +455,25 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
     }
   }
 
-  // Detect Assignee Name (e.g. "Rizwan, please ...", "Hey Ahmed, ...")
+  // Detect Assignee Name (e.g. "Rizwan, please ...", "Fahad bhai...", "Khurshid...")
   let detectedAssignee = '';
-  const nameMatch = trimmed.match(/^([a-z0-9_-]+)[,:]\s*/i) || trimmed.match(/^(?:hi|hey|hello|dear)\s+([a-z0-9_-]+)[,:]?\s*/i);
-  if (nameMatch && nameMatch[1]) {
-    const nameCand = nameMatch[1].trim();
-    if (!['good', 'morning', 'afternoon', 'evening', 'please', 'all', 'team'].includes(nameCand.toLowerCase())) {
-      detectedAssignee = nameCand.charAt(0).toUpperCase() + nameCand.slice(1);
+  if (/\b(?:fahad\s+bhai|fahad\s+rasheed|fahad)\b/i.test(trimmed)) {
+    detectedAssignee = 'Fahad Rasheed';
+  } else if (/\b(?:khurshid\s+bhai|khurshid\s+anwar|khurshid)\b/i.test(trimmed)) {
+    detectedAssignee = 'Khurshid Anwar';
+  } else if (/\bsarfraz\b/i.test(trimmed)) {
+    detectedAssignee = 'Sarfraz';
+  } else {
+    const nameMatch = trimmed.match(/^([a-z0-9_-]+)[,:]\s*/i) || trimmed.match(/^(?:hi|hey|hello|dear)\s+([a-z0-9_-]+)[,:]?\s*/i);
+    if (nameMatch && nameMatch[1]) {
+      const nameCand = nameMatch[1].trim();
+      if (!['good', 'morning', 'afternoon', 'evening', 'please', 'all', 'team'].includes(nameCand.toLowerCase())) {
+        detectedAssignee = nameCand.charAt(0).toUpperCase() + nameCand.slice(1);
+      }
     }
   }
+
+  const detectedCategory = detectBusinessCategory(trimmed);
 
   // Generate Title & Description
   let cleanedTitle = trimmed
@@ -334,6 +514,7 @@ export function extractTaskHeuristic(text, { senderName = '', messageTimestamp =
     dateInterpretation,
     sourceSender: senderName,
     reason: 'Actionable work instruction detected via keywords and imperative structure',
+    businessCategory: detectedCategory,
     missingInformation,
     modelUsed: 'heuristic'
   };
@@ -350,18 +531,38 @@ export async function callGemini(apiKey, text, context, options = {}) {
     : [...new Set([primaryModel, 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-1.5-flash'])].filter(Boolean);
 
   const isVoice = Boolean(context.audio?.buffer);
-  const prompt = `You are a strict task classification and extraction AI for a project management system.
+  const prompt = `You are an expert, strict task classification and extraction AI for PIX X TECHNOLOGIEES.
 ${isVoice ? 'The user sent a WhatsApp voice message / audio note. Listen carefully to the voice note (it may be spoken in English, Urdu, Hindi, or conversational mix).' : 'Analyze the following WhatsApp message received in a team group or direct chat.'}
 
+${PIXX_BUSINESS_CONTEXT}
+
 CRITICAL TASK CLASSIFICATION RULES:
-1. ONLY set isTask: true if the message contains a CLEAR, EXPLICIT WORK TASK, DELEGATION, OR INSTRUCTION to perform work (e.g. "prepare the proposal", "fix the login page", "update the database", "submit the report by tomorrow").
+1. ONLY set isTask: true if the message contains a CLEAR, EXPLICIT WORK TASK, DELEGATION, OR INSTRUCTION to perform work (e.g. "prepare the proposal", "fix the login page", "update the database", "submit the report by tomorrow", "Fahad bhai UK property report ready kar dein", "Station shop ka rota bana do").
 2. STRICTLY SET isTask: false for:
    - Casual conversation, personal chatter, or greetings ("hi", "how are you", "salam", "good morning").
    - Questions about availability, whereabouts, or routine status ("where are you", "are you free", "can you talk", "did you reach?").
    - Routine communication requests ("call me", "call when free", "pick up the phone", "let me know").
-   - Acknowledgements, thanks, or simple remarks ("ok", "noted", "seen", "thanks", "will do later", "working on it").
+   - Acknowledgements, completion reports, or simple remarks ("ok", "noted", "seen", "thanks", "Alhamdulillah report complete ho gayi").
    - Personal plans ("let's meet for lunch", "going home now").
 3. When in doubt or if the message is ambiguous casual chatting, ALWAYS set isTask: false with confidence: 0.
+
+BUSINESS CATEGORY SELECTION:
+Choose exactly one businessCategory from:
+- PAK_PROPERTY (Pakistani property records, rent collection, general property management)
+- PAK_FINANCE_EXPENSES (Pakistani property expenses, vouchers, ledgers, bank transactions, entries verification)
+- UK_PROPERTY (UK properties: Old Street, Best Standard, SK Hamilton, Homewards, Mile End, Global Standard)
+- UK_PROPERTY_FINANCE (UK property rent, mortgages, service charges, ledgers, statements)
+- UK_PROPERTY_MAINTENANCE_COMPLIANCE (Gas safety, electrical certificates, renewals, warranties, insurance, inspections)
+- UK_BICYCLE_SHOPS (Shops: Station, Camden, Chelsea, Edgware, Southwark, Leebridge general operations)
+- ROTA_ATTENDANCE (Worker attendance, late arrivals, missing attendance, check-in records)
+- ROTA_SCHEDULING (Weekly rotas, worker allocation, shift scheduling, worker availability)
+- SOFTWARE_DEVELOPMENT (Internal apps, expense tracker bugs, task manager features, APIs, database, code)
+- IT_SUPPORT (Hosting, server infrastructure, credentials, access, IT hardware)
+- CLIENT_COMMUNICATION (Client follow-ups, proposals, inquiries)
+- MANAGEMENT_REPORTING (High-level business reports, executive summaries, KPI tracking)
+- ADMINISTRATION (General office administration, legal, staff coordination)
+- OTHER_BUSINESS (Other company initiatives)
+- NEEDS_REVIEW (Ambiguous or requiring manual human review)
 
 Reference message timestamp: ${context.messageTimestamp.toISOString()}
 Sender: ${context.senderName || 'Unknown'}
@@ -374,14 +575,15 @@ Return ONLY a valid JSON object matching this schema:
   "isTask": boolean,
   "title": string (concise actionable title, max 100 chars, or empty string if not a task),
   "description": string (clear instructions${isVoice ? ' including complete speech transcription' : ' based strictly on message content'}, or empty string if not a task),
-  "assigneeName": string or null (name of the person asked to do the task, only if clearly stated in the message),
+  "assigneeName": string or null (name of the person asked to do the task, e.g. "Fahad Rasheed", "Khurshid Anwar", "Sarfraz", or null),
   "assigneePhone": string or null (never invent, leave null if not provided),
   "priority": "Low" | "Medium" | "High" | "Urgent",
-  "dueDate": ISO string or null (interpret relative dates like 'tomorrow' or 'by Monday' using the reference message timestamp),
+  "dueDate": ISO string or null (interpret relative dates like 'tomorrow', 'kal', 'by Monday' using the reference message timestamp),
+  "businessCategory": "PAK_PROPERTY" | "PAK_FINANCE_EXPENSES" | "UK_PROPERTY" | "UK_PROPERTY_FINANCE" | "UK_PROPERTY_MAINTENANCE_COMPLIANCE" | "UK_BICYCLE_SHOPS" | "ROTA_ATTENDANCE" | "ROTA_SCHEDULING" | "SOFTWARE_DEVELOPMENT" | "IT_SUPPORT" | "CLIENT_COMMUNICATION" | "MANAGEMENT_REPORTING" | "ADMINISTRATION" | "OTHER_BUSINESS" | "NEEDS_REVIEW",
   "projectName": string or null (matching title from available projects only if confident),
   "projectId": string or null (matching id from available projects only if confident),
   "confidence": number between 0 and 1,
-  "reason": string (brief explanation of whether this is a genuine work task or casual chat),
+  "reason": string (brief explanation of business context, department, and whether this is a genuine work task),
   "missingInformation": array of strings (ambiguous details that require manual confirmation)
 }`;
 

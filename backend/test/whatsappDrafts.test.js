@@ -6,6 +6,7 @@ import {
 } from '../src/services/whatsappService.js';
 import {
   extractTaskHeuristic,
+  detectBusinessCategory,
   validateExtractionOutput,
   parseRelativeDate,
   callGemini,
@@ -1311,5 +1312,38 @@ test('33. Direct 1-on-1 personal chat protection: unknown sender is ignored whil
   assert.equal(drafts[0].groupName, 'Direct (Boss UK)');
   assert.equal(drafts[0].aiExtraction.title, 'Prepare client invoices');
   await service.close();
+});
+
+test('35. PixxTechnologiees business context and Roman Urdu task categorization', () => {
+  // 1. Pakistani property & expenses
+  const pakFinance = extractTaskHeuristic('Khurshid, Sarfraz ki October entries verify kar den');
+  assert.equal(pakFinance.isTask, true);
+  assert.equal(pakFinance.assigneeName, 'Khurshid Anwar');
+  assert.equal(pakFinance.businessCategory, 'PAK_FINANCE_EXPENSES');
+
+  // 2. UK Property maintenance & compliance
+  const ukCompliance = extractTaskHeuristic('Check the gas certificate expiry date for the Old Street property');
+  assert.equal(ukCompliance.isTask, true);
+  assert.equal(ukCompliance.businessCategory, 'UK_PROPERTY_MAINTENANCE_COMPLIANCE');
+
+  // 3. UK Bicycle Shops Rota System
+  const rotaTask = extractTaskHeuristic('Station shop ka next week rota bana do');
+  assert.equal(rotaTask.isTask, true);
+  assert.equal(rotaTask.businessCategory, 'ROTA_SCHEDULING');
+
+  // 4. Software Development
+  const techTask = extractTaskHeuristic('Expense tracker ka login kaam nahi kar raha, please fix karo');
+  assert.equal(techTask.isTask, true);
+  assert.equal(techTask.businessCategory, 'SOFTWARE_DEVELOPMENT');
+
+  // 5. Completion / casual greeting should NOT be a task
+  const nonTask = extractTaskHeuristic('Alhamdulillah, report complete ho gayi');
+  assert.equal(nonTask.isTask, false);
+
+  // 6. Roman Urdu date interpretation ('kal tak')
+  const baseDate = new Date('2026-10-24T10:00:00Z');
+  const relDate = parseRelativeDate('Fahad bhai, UK property ka report kal tak ready kar dein', baseDate);
+  assert.ok(relDate.date instanceof Date);
+  assert.equal(relDate.date.getDate(), 25); // Next day
 });
 

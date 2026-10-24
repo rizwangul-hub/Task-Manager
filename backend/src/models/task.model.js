@@ -105,6 +105,11 @@ const taskSchema = new mongoose.Schema(
       },
       default: TASK_SOURCES.MANUAL
     },
+    businessCategory: {
+      type: String,
+      trim: true,
+      default: 'NEEDS_REVIEW'
+    },
     whatsappMessageId: {
       type: String,
       trim: true,
