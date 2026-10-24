@@ -42,14 +42,14 @@ import {
 } from 'lucide-react';
 
 const DEFAULT_COLUMNS = {
-  key: true,
+  key: false,
   title: true,
-  project: true,
-  assignees: false,
+  project: false,
+  assignees: true,
   status: true,
   priority: true,
   dueDate: true,
-  timeSpent: true,
+  timeSpent: false,
   actions: true
 };
 
@@ -92,7 +92,7 @@ export const AllTasksPage = () => {
   const [contactFilter, setContactFilter] = useState('');
   const [dueDateFrom, setDueDateFrom] = useState('');
   const [dueDateTo, setDueDateTo] = useState('');
-  const [groupBy, setGroupBy] = useState('project'); // 'none' | 'status' | 'project' | 'priority' | 'groupTitle'
+  const [groupBy, setGroupBy] = useState('none'); // 'none' | 'status' | 'priority' | 'groupTitle'
 
   // Sorting
   const [sortBy, setSortBy] = useState('createdAt');
@@ -385,8 +385,8 @@ export const AllTasksPage = () => {
     e.preventDefault();
     setFormError('');
 
-    if (!formTitle.trim() || !formProject) {
-      setFormError('Task title and target project are required.');
+    if (!formTitle.trim()) {
+      setFormError('Task title is required.');
       return;
     }
 
@@ -395,7 +395,7 @@ export const AllTasksPage = () => {
       await taskService.createTask({
         title: formTitle.trim(),
         description: formDesc.trim(),
-        project: formProject,
+        project: formProject || undefined,
         assignee: assignee || null,
         contactId: contactId || null,
         idempotencyKey: creationRequestId,
@@ -516,18 +516,7 @@ export const AllTasksPage = () => {
         </div>
 
         <div className="toolbar-filters-wrap">
-          {/* Project Filter */}
-          <select
-            className="filter-select"
-            value={projectFilter}
-            onChange={(e) => { setProjectFilter(e.target.value); setPage(1); }}
-            aria-label="Filter by project"
-          >
-            <option value="">All Projects</option>
-            {projects.map((p) => (
-              <option key={p._id} value={p._id}>{p.name}</option>
-            ))}
-          </select>
+
 
           {/* Status Filter */}
           <select
@@ -572,7 +561,6 @@ export const AllTasksPage = () => {
               <option value="none">Group: None</option>
               <option value="status">Group: Status</option>
               <option value="priority">Group: Priority</option>
-              <option value="project">Group: Project</option>
               <option value="groupTitle">Group: WhatsApp group</option>
             </select>
           )}
@@ -944,19 +932,7 @@ export const AllTasksPage = () => {
             />
           </FormField>
 
-          <FormField label="Project" required>
-            <select
-              className="input-field"
-              value={formProject}
-              onChange={(e) => setFormProject(e.target.value)}
-              required
-            >
-              <option value="">Select Target Project</option>
-              {projects.map((p) => (
-                <option key={p._id} value={p._id}>{p.name}</option>
-              ))}
-            </select>
-          </FormField>
+
 
           <FormField label="Assign To" required as="div">
             <input

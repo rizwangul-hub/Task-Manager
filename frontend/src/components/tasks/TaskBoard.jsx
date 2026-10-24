@@ -96,7 +96,6 @@ const TaskBoard = ({
   const [emptyCreateTitle, setEmptyCreateTitle] = useState('');
   const [selectedTaskIds, setSelectedTaskIds] = useState([]);
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [customColumns, setCustomColumns] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('pixx_task_custom_columns') || '[]');
@@ -110,8 +109,7 @@ const TaskBoard = ({
   const groups = useMemo(() => {
     const result = new Map();
     tasks.forEach((task) => {
-      let title = 'All tasks';
-      if (groupBy === 'project') title = task.project?.name || 'Unassigned project';
+      let title = 'Tasks';
       if (groupBy === 'status') title = task.status || 'Unspecified';
       if (groupBy === 'priority') title = task.priority || 'Unspecified';
       if (groupBy === 'groupTitle') title = task.groupTitle || 'General Tasks';
@@ -152,10 +150,8 @@ const TaskBoard = ({
 
   const submitQuickCreate = async (event, groupTitle, groupTasks) => {
     event.preventDefault();
-    const projectId = groupTasks[0]?.project?._id || groupTasks[0]?.project ||
-      projects.find((project) => project.name === groupTitle)?._id ||
-      (projects.length === 1 ? projects[0]._id : '');
-    if (!projectId || !quickCreateTitle.trim()) return;
+    if (!quickCreateTitle.trim()) return;
+    const projectId = groupTasks[0]?.project?._id || groupTasks[0]?.project || null;
     await onQuickCreate(projectId, quickCreateTitle.trim());
     setQuickCreateTitle('');
     setQuickCreateGroup(null);
@@ -166,7 +162,6 @@ const TaskBoard = ({
     ['status', 'Status', Check],
     ['dueDate', 'Date', CalendarDays],
     ['priority', 'Priority', Layers],
-    ['project', 'Project', FolderKanban],
     ['timeSpent', 'Time tracked', AlignLeft],
     ['key', 'Task ID', AlignLeft]
   ];
@@ -196,43 +191,10 @@ const TaskBoard = ({
 
   return (
     <div className="monday-board-layout">
-      <aside className={`board-sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`} aria-label="Workspace boards">
-        <div className="board-sidebar-heading">
-          <Layers size={16} />
-          <span>Workspace</span>
-          <button type="button" title={sidebarCollapsed ? 'Expand workspace list' : 'Collapse workspace list'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
-            {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-          </button>
-        </div>
-        <button
-          type="button"
-          className={`board-nav-item ${!selectedProjectId ? 'selected' : ''}`}
-          onClick={() => onSelectProject('')}
-        >
-          <FolderKanban size={15} />
-          <span>All tasks</span>
-        </button>
-        <div className="board-nav-label">Boards</div>
-        {projects.map((project, index) => (
-          <button
-            type="button"
-            key={project._id}
-            className={`board-nav-item ${selectedProjectId === project._id ? 'selected' : ''}`}
-            onClick={() => onSelectProject(project._id)}
-          >
-            <span className={`board-nav-dot board-nav-dot-${GROUP_COLORS[index % GROUP_COLORS.length]}`} />
-            <span>{project.name}</span>
-          </button>
-        ))}
-        <div className="board-sidebar-footer">
-          <CirclePlus size={15} /> Workspaces & boards
-        </div>
-      </aside>
-
       <section className="monday-board" aria-label="Task board">
         <div className="board-toolbar">
           <div className="board-toolbar-title">
-            <h2>{projects.find((project) => project._id === selectedProjectId)?.name || 'Task workspace'}</h2>
+            <h2>Task workspace</h2>
             <span>{tasks.length} tasks</span>
           </div>
           <div className="board-toolbar-actions">
@@ -337,7 +299,6 @@ const TaskBoard = ({
                           {visibleCols.status && <th>Status</th>}
                           {visibleCols.priority && <th>Priority</th>}
                           {visibleCols.dueDate && <th>Date</th>}
-                          {visibleCols.project && <th>Project</th>}
                           {visibleCols.timeSpent && <th>Time</th>}
                           {visibleCols.key && <th>Task ID</th>}
                           {customColumns.map((column) => <th key={column.key}>{column.label}</th>)}
@@ -541,7 +502,6 @@ const TaskBoard = ({
                               )}
                               {visibleCols.priority && <td><span className={`board-priority priority-${(task.priority || 'Medium').toLowerCase()}`}>{task.priority || 'Medium'}</span></td>}
                               {visibleCols.dueDate && <td><label className="board-date-cell"><CalendarDays size={14} /><input type="date" aria-label={`Due date for ${task.title}`} value={task.dueDate ? task.dueDate.slice(0, 10) : ''} disabled={!canEditTask(task)} onChange={(event) => void onUpdateTask(task, { dueDate: event.target.value || null })} /></label></td>}
-                              {visibleCols.project && <td className="board-muted-cell">{task.project?.name || '—'}</td>}
                               {visibleCols.timeSpent && <td className="board-muted-cell">{((task.totalTimeSpentMinutes || 0) / 60).toFixed(1)}h</td>}
                               {visibleCols.key && <td className="board-task-key">{task.taskKey}</td>}
                               {customColumns.map((column) => {
@@ -574,9 +534,8 @@ const TaskBoard = ({
                             <td colSpan={8}>
                               <form onSubmit={(event) => submitQuickCreate(event, groupTitle, groupTasks)}>
                                 <input autoFocus placeholder="Type a task name and press Enter" value={quickCreateTitle} onChange={(event) => setQuickCreateTitle(event.target.value)} />
-                                <button type="submit" disabled={!quickCreateTitle.trim() || !groupProjectId}><Check size={15} /></button>
+                                <button type="submit" disabled={!quickCreateTitle.trim()}><Check size={15} /></button>
                                 <button type="button" onClick={() => setQuickCreateGroup(null)}><X size={15} /></button>
-                                {!groupProjectId && <span>Select a project to create a task.</span>}
                               </form>
                             </td>
                           </tr>

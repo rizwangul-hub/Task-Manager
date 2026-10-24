@@ -228,10 +228,7 @@ export const WhatsAppInboxPage = () => {
       toast.error('Task title is required.');
       return;
     }
-    if (!editProjectId) {
-      toast.error('Please assign this task to a workspace project.');
-      return;
-    }
+
 
     setSubmittingAction(true);
     try {
@@ -877,32 +874,7 @@ export const WhatsAppInboxPage = () => {
               placeholder="Detailed instructions..."
             />
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              <div>
-                <label className="form-label" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>
-                  Project *
-                </label>
-                <select
-                  className="form-input"
-                  value={editProjectId}
-                  onChange={(e) => setEditProjectId(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    borderRadius: '6px',
-                    border: '1px solid var(--border-color, #cbd5e1)'
-                  }}
-                  required
-                >
-                  <option value="">Select Target Project</option>
-                  {projects.map((p) => (
-                    <option key={p._id} value={p._id}>
-                      {p.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
+            <div style={{ marginBottom: '1rem' }}>
               <div>
                 <label className="form-label" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>
                   Priority

@@ -397,9 +397,12 @@ export const taskController = {
         }
       }
 
-      const project = await Project.findById(projectId);
-      if (!project || project.isArchived) {
-        return next(new AppError('Target project does not exist or has been archived.', 404));
+      let project = null;
+      if (projectId && mongoose.isValidObjectId(projectId)) {
+        project = await Project.findById(projectId);
+        if (project && project.isArchived) {
+          return next(new AppError('Target project has been archived.', 404));
+        }
       }
 
       let assignedContact = null;
@@ -434,23 +437,31 @@ export const taskController = {
       if (validatedAssigneeIds.length === 0 && !Object.prototype.hasOwnProperty.call(req.body, 'assignee')) {
         validatedAssigneeIds.push(req.user._id);
       }
-      await project.save();
+      if (project) {
+        await project.save();
+      }
 
       // Date validation
       if (startDate && dueDate && new Date(startDate) > new Date(dueDate)) {
         return next(new AppError('Start date cannot be after due date.', 400));
       }
 
-      // Generate incremental taskKey based on existing tasks in project
-      const count = await Task.countDocuments({ project: project._id });
-      const taskKey = `${project.projectKey}-${count + 1}`;
+      // Generate incremental taskKey based on existing tasks in project or general workspace
+      const prefix = project?.projectKey || 'TASK';
+      let count = await Task.countDocuments({ project: project?._id || null });
+      let keyCandidate = `${prefix}-${count + 1}`;
+      while (await Task.exists({ taskKey: keyCandidate })) {
+        count += 1;
+        keyCandidate = `${prefix}-${count + 1}`;
+      }
+      const taskKey = keyCandidate;
 
       const initialStatus = status && Object.values(TASK_STATUSES).includes(status) ? status : TASK_STATUSES.TO_DO;
 
       const task = await Task.create({
         title: title.trim(),
         description: (description || '').trim(),
-        project: project._id,
+        project: project?._id || null,
         taskKey,
         creator: req.user._id,
         ...(idempotencyKey ? { creationRequestId: idempotencyKey } : {}),
@@ -468,7 +479,7 @@ export const taskController = {
       // Audit log event
       await TaskEvent.logEvent({
         task: task._id,
-        project: project._id,
+        project: project?._id || null,
         user: req.user._id,
         action: TASK_EVENT_ACTIONS.TASK_CREATED,
         details: {

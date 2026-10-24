@@ -483,19 +483,12 @@ export const whatsappDraftController = {
         draft.editableFields?.projectId ||
         draft.aiExtraction?.projectId;
 
-      // If no project specified, find first available active project or prompt
-      if (!targetProjectId) {
-        const defaultProject = await Project.findOne({ isArchived: { $ne: true } }).sort({ createdAt: 1 });
-        if (defaultProject) {
-          targetProjectId = defaultProject._id;
-        } else {
-          return next(new AppError('No workspace project found. Please create a project first.', 400));
+      let project = null;
+      if (targetProjectId && mongoose.isValidObjectId(targetProjectId)) {
+        project = await Project.findById(targetProjectId);
+        if (project && project.isArchived) {
+          project = null;
         }
-      }
-
-      const project = await Project.findById(targetProjectId);
-      if (!project || project.isArchived) {
-        return next(new AppError('Target project does not exist or has been archived.', 400));
       }
 
       const effectivePriority =
@@ -518,15 +511,13 @@ export const whatsappDraftController = {
         return next(new AppError('Start date cannot be after due date.', 400));
       }
 
-      // Generate incremental taskKey based on existing tasks in project
-      let taskKey;
-      let count = await Task.countDocuments({ project: project._id });
-      let keyCandidate = `${project.projectKey}-${count + 1}`;
-      let collision = await Task.exists({ taskKey: keyCandidate });
-      while (collision) {
+      // Generate incremental taskKey based on existing tasks in project or general workspace
+      const prefix = project?.projectKey || 'TASK';
+      let count = await Task.countDocuments({ project: project?._id || null });
+      let keyCandidate = `${prefix}-${count + 1}`;
+      while (await Task.exists({ taskKey: keyCandidate })) {
         count += 1;
-        keyCandidate = `${project.projectKey}-${count + 1}`;
-        collision = await Task.exists({ taskKey: keyCandidate });
+        keyCandidate = `${prefix}-${count + 1}`;
       }
       taskKey = keyCandidate;
 
@@ -608,7 +599,7 @@ export const whatsappDraftController = {
       const newTask = await Task.create({
         title: effectiveTitle,
         description: effectiveDescription,
-        project: project._id,
+        project: project?._id || null,
         taskKey,
         creator: req.user._id,
         assignees: assignedUserIds,
@@ -684,7 +675,7 @@ export const whatsappDraftController = {
       // Log task event
       await TaskEvent.logEvent({
         task: newTask._id,
-        project: project._id,
+        project: project?._id || null,
         user: req.user._id,
         action: TASK_EVENT_ACTIONS.TASK_CREATED,
         details: {
