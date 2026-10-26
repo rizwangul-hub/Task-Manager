@@ -15,19 +15,7 @@ import apiRouter from './routes/index.js';
 const app = express();
 const sanitizeMongoInput = mongoSanitize();
 
-// Ensure MongoDB is connected on incoming requests (essential for serverless runtimes like Vercel)
-app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-  } catch (err) {
-    logger.error('[DB_MIDDLEWARE_ERROR] Error connecting to database on request:', err);
-  }
-  next();
-});
 app.set('trust proxy', 1);
-
-// Security HTTP headers
-app.use(helmet());
 
 // Cross-Origin Resource Sharing
 const allowedOrigins = env.NODE_ENV === 'production'
@@ -44,7 +32,7 @@ const isOriginAllowed = (origin) => {
   return false;
 };
 
-app.use(cors({
+const corsMiddleware = cors({
   origin: (origin, callback) => {
     if (isOriginAllowed(origin)) {
       callback(null, true);
@@ -63,7 +51,27 @@ app.use(cors({
     'X-WhatsApp-Webhook-Secret',
     'X-Twilio-Signature'
   ]
+});
+
+// Run CORS immediately so OPTIONS preflights are answered in 1ms without delays
+app.use(corsMiddleware);
+app.options('*', corsMiddleware);
+
+// Security HTTP headers (allow cross-origin resource sharing for frontend clients)
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
+
+// Ensure MongoDB is connected on incoming requests (skip for OPTIONS preflight)
+app.use(async (req, res, next) => {
+  if (req.method === 'OPTIONS') return next();
+  try {
+    await connectDB();
+  } catch (err) {
+    logger.error('[DB_MIDDLEWARE_ERROR] Error connecting to database on request:', err);
+  }
+  next();
+});
 
 // HTTP request logger
 app.use(morgan(env.NODE_ENV === 'development' ? 'dev' : 'combined'));
