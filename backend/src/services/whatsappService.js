@@ -44,7 +44,10 @@ export const cacheRecentWhatsAppMessage = (keyId, messageProto) => {
 };
 
 export const normalizeWhatsAppPhoneNumber = (target) => {
-  let digits = String(target || '').replace(/\D/g, '');
+  if (!target) return '';
+  // Strip JID domain and device index FIRST: e.g. "923179500901:36@s.whatsapp.net" -> "923179500901"
+  const raw = String(target).split('@')[0].split(':')[0];
+  let digits = raw.replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
 
   if (digits.startsWith('03') && digits.length === 11) {
@@ -632,13 +635,13 @@ export const createWhatsAppService = ({
         isAllowedSender = true;
         matchedContactOrUser = checkResult;
       }
-    } else if (inboundDependencies.createDraft || process.env.WHATSAPP_ALLOW_ALL_SENDERS === 'true') {
+    } else if (inboundDependencies.createDraft || process.env.WHATSAPP_ALLOW_ALL_SENDERS === 'true' || (fromMe && process.env.WHATSAPP_ALLOW_FROM_ME === 'true')) {
       isAllowedSender = true;
     } else {
       try {
         const { Contact } = await import('../models/contact.model.js');
         const { User } = await import('../models/user.model.js');
-        const cleanNumber = (senderPhone || senderJid || remoteJid).replace(/\D/g, '');
+        const cleanNumber = normalizeWhatsAppPhoneNumber(senderPhone || senderJid || remoteJid);
         if (cleanNumber && cleanNumber.length >= 7) {
           const suffix = cleanNumber.slice(-9);
           matchedContactOrUser = await Contact.findOne({
@@ -653,6 +656,20 @@ export const createWhatsAppService = ({
               ],
               isActive: true
             });
+          }
+        }
+        // Name-based fallback if phone matching didn't match
+        if (!matchedContactOrUser && senderName) {
+          const normName = senderName.trim().toLowerCase();
+          if (normName && normName !== 'me' && normName !== 'group member' && normName !== 'direct sender') {
+            const words = normName.split(/\s+/).filter((w) => w.length >= 3);
+            for (const word of words) {
+              matchedContactOrUser = await Contact.findOne({
+                fullName: new RegExp(word, 'i'),
+                isActive: true
+              });
+              if (matchedContactOrUser) break;
+            }
           }
         }
         if (matchedContactOrUser) {
@@ -719,15 +736,29 @@ export const createWhatsAppService = ({
           } else if (!inboundDependencies.uploadMedia) {
             try {
               serviceLogger.info('[WA_MEDIA] Downloading attached WhatsApp media...', { messageId, hasAudio, hasImage });
+              const msgToDownload = (innerMsg && innerMsg !== rawMsg) ? { key: msg.key, message: innerMsg } : msg;
               mediaBuffer = await downloadMediaMessage(
-                msg,
+                msgToDownload,
                 'buffer',
                 {},
                 {
                   logger: createBaileysLogger(serviceLogger),
                   reuploadRequest: (msgToReupload) => instanceSock?.updateMediaMessage(msgToReupload)
                 }
-              );
+              ).catch(async (firstErr) => {
+                if (msgToDownload !== msg) {
+                  return downloadMediaMessage(
+                    msg,
+                    'buffer',
+                    {},
+                    {
+                      logger: createBaileysLogger(serviceLogger),
+                      reuploadRequest: (msgToReupload) => instanceSock?.updateMediaMessage(msgToReupload)
+                    }
+                  );
+                }
+                throw firstErr;
+              });
             } catch (mediaError) {
               serviceLogger.error('[WA_MEDIA_ERROR] Failed to download attached media:', {
                 messageId,

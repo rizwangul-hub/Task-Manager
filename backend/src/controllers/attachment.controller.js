@@ -65,7 +65,7 @@ export const attachmentController = {
       // Audit log event
       await TaskEvent.logEvent({
         task: task._id,
-        project: task.project._id || task.project,
+        project: task.project ? (task.project._id || task.project) : null,
         user: req.user._id,
         action: TASK_EVENT_ACTIONS.ATTACHMENT_ADDED,
         details: {
@@ -134,7 +134,7 @@ export const attachmentController = {
       // Audit log event
       await TaskEvent.logEvent({
         task: task._id,
-        project: task.project._id || task.project,
+        project: task.project ? (task.project._id || task.project) : null,
         user: req.user._id,
         action: TASK_EVENT_ACTIONS.ATTACHMENT_REMOVED,
         details: removedDetails
