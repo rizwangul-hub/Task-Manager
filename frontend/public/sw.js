@@ -3,7 +3,7 @@
  * Progressive Web App shell caching & safe network routing
  */
 
-const CACHE_NAME = 'task-manager-shell-v1';
+const CACHE_NAME = 'task-manager-shell-v2';
 
 // Static app shell assets to precache on install
 const PRECACHE_ASSETS = [
@@ -50,24 +50,33 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
+
+  // 1. Only handle standard HTTP/HTTPS schemes (ignore chrome-extension://, moz-extension://, etc.)
+  if (!req.url.startsWith('http://') && !req.url.startsWith('https://')) {
+    return;
+  }
+
   const url = new URL(req.url);
 
-  // 1. NEVER cache non-GET requests (POST, PUT, DELETE, PATCH, etc.)
+  // 2. Only cache own-origin assets (ignore external requests)
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  // 3. NEVER cache non-GET requests (POST, PUT, DELETE, PATCH, etc.)
   if (req.method !== 'GET') {
     return;
   }
 
-  // 2. STRICT: NEVER cache API calls, auth tokens, login credentials or WebSocket traffic
+  // 4. STRICT: NEVER cache API calls, auth tokens, login credentials or WebSocket traffic
   if (
     url.pathname.startsWith('/api') ||
-    url.pathname.includes('/socket.io') ||
-    url.hostname.includes('render.com') ||
-    url.hostname.includes('cloudinary.com')
+    url.pathname.includes('/socket.io')
   ) {
     return;
   }
 
-  // 3. Navigation requests (HTML pages) -> Network-First with cached SPA fallback
+  // 5. Navigation requests (HTML pages) -> Network-First with cached SPA fallback
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
@@ -93,7 +102,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Static assets (JS, CSS, images, icons, fonts) -> Stale-While-Revalidate
+  // 6. Static assets (JS, CSS, images, icons, fonts) -> Stale-While-Revalidate
   const isStaticAsset =
     url.pathname.startsWith('/assets/') ||
     url.pathname.endsWith('.js') ||
