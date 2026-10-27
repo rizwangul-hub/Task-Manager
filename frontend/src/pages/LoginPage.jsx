@@ -137,7 +137,7 @@ export const LoginPage = () => {
 
         <div className="login-footer">
           <p className="login-security-notice">
-            Private single-user workspace. Public registration and external account creation are disabled.
+            Private workspace. Public registration and external account creation are disabled.
           </p>
         </div>
       </div>
