@@ -35,7 +35,8 @@ import {
   Users,
   MessageSquare,
   RefreshCw,
-  Eye,
+    Eye,
+  EyeOff,
   Check,
   XCircle,
   Copy,
@@ -57,6 +58,42 @@ export const DashboardPage = () => {
   const [stats, setStats] = useState(null);
   const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
   const { toast } = useToast();
+
+  // Dashboard Hide / Show State & Scroll Lock
+  const [isDashboardHidden, setIsDashboardHidden] = useState(() => {
+    try {
+      return localStorage.getItem('task_manager_dashboard_hidden') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleDashboardVisibility = useCallback(() => {
+    setIsDashboardHidden((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('task_manager_dashboard_hidden', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
+  // Lock overflow when dashboard is hidden so that no scrolling occurs
+  useEffect(() => {
+    if (isDashboardHidden) {
+      const origHtmlOverflow = document.documentElement.style.overflow;
+      const origBodyOverflow = document.body.style.overflow;
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+
+      return () => {
+        document.documentElement.style.overflow = origHtmlOverflow;
+        document.body.style.overflow = origBodyOverflow;
+      };
+    }
+  }, [isDashboardHidden]);
 
   // WhatsApp Groups State
   const [groups, setGroups] = useState([]);
@@ -381,6 +418,16 @@ export const DashboardPage = () => {
   const pageActions = (
     <div className="header-action-group">
       <Button
+        variant={isDashboardHidden ? 'primary' : 'outline'}
+        size="md"
+        icon={isDashboardHidden ? Eye : EyeOff}
+        onClick={toggleDashboardVisibility}
+        title={isDashboardHidden ? 'Show full dashboard' : 'Hide dashboard to fit one screen without scrolling'}
+        className="hide-dashboard-toggle-btn"
+      >
+        {isDashboardHidden ? 'Show Dashboard' : 'Hide Dashboard'}
+      </Button>
+      <Button
         variant="outline"
         size="md"
         icon={Server}
@@ -402,10 +449,114 @@ export const DashboardPage = () => {
   return (
     <PageContainer
       title={`Welcome back, ${user?.name || 'Manager'}`}
-      subtitle="Operational workspace overview for your deliverables and projects."
-      badge={<StatusBadge status="active" label="Workspace Owner" />}
+      subtitle={
+        isDashboardHidden
+          ? 'Dashboard is hidden — compact single-screen view active.'
+          : 'Operational workspace overview for your deliverables and projects.'
+      }
+      badge={
+        <StatusBadge
+          status={isDashboardHidden ? 'neutral' : 'active'}
+          label={isDashboardHidden ? 'Hidden Mode' : 'Workspace Owner'}
+        />
+      }
       actions={pageActions}
+      className={isDashboardHidden ? 'dashboard-page-hidden' : ''}
     >
+      {isDashboardHidden ? (
+        <div className="dashboard-hidden-card">
+          <div className="dashboard-hidden-card-header">
+            <div className="dashboard-hidden-title-group">
+              <div className="dashboard-hidden-icon-wrap">
+                <EyeOff size={22} className="dashboard-hidden-icon" />
+              </div>
+              <div>
+                <h2 className="dashboard-hidden-heading">Dashboard is Hidden</h2>
+                <p className="dashboard-hidden-description">
+                  All dashboard widgets and live lists are collapsed. The page is locked to a single view with zero scrolling.
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="primary"
+              size="md"
+              icon={Eye}
+              onClick={toggleDashboardVisibility}
+              className="dashboard-hidden-show-btn"
+            >
+              Show Dashboard
+            </Button>
+          </div>
+
+          <div className="dashboard-hidden-metrics-row">
+            <div className="dashboard-hidden-metric-chip">
+              <span className="metric-chip-label">Total Tasks</span>
+              <span className="metric-chip-val">{metrics.totalTasks || 0}</span>
+            </div>
+            <div className="dashboard-hidden-metric-chip">
+              <span className="metric-chip-label">Pending</span>
+              <span className="metric-chip-val pending">{metrics.pending || 0}</span>
+            </div>
+            <div className="dashboard-hidden-metric-chip">
+              <span className="metric-chip-label">In Progress</span>
+              <span className="metric-chip-val in-progress">{metrics.inProgress || 0}</span>
+            </div>
+            <div className="dashboard-hidden-metric-chip">
+              <span className="metric-chip-label">Completed</span>
+              <span className="metric-chip-val completed">{metrics.completed || 0}</span>
+            </div>
+            <div className="dashboard-hidden-metric-chip">
+              <span className="metric-chip-label">Overdue</span>
+              <span className="metric-chip-val overdue">{metrics.overdue || 0}</span>
+            </div>
+            <div className="dashboard-hidden-metric-chip">
+              <span className="metric-chip-label">WhatsApp Drafts</span>
+              <span className="metric-chip-val drafts">{pendingDrafts.length}</span>
+            </div>
+            <div className="dashboard-hidden-metric-chip">
+              <span className="metric-chip-label">Monitored Groups</span>
+              <span className="metric-chip-val groups">{groups.filter((g) => g.isMonitored).length}</span>
+            </div>
+          </div>
+
+          <div className="dashboard-hidden-quick-links">
+            <span className="quick-links-title">Quick Actions:</span>
+            <button
+              type="button"
+              className="dashboard-hidden-link-pill"
+              onClick={() => navigate('/all-tasks')}
+            >
+              <ListTodo size={14} />
+              All Tasks
+            </button>
+            <button
+              type="button"
+              className="dashboard-hidden-link-pill"
+              onClick={() => navigate('/my-work')}
+            >
+              <CheckCircle2 size={14} />
+              My Work
+            </button>
+            <button
+              type="button"
+              className="dashboard-hidden-link-pill"
+              onClick={() => navigate('/whatsapp-inbox')}
+            >
+              <MessageSquare size={14} />
+              WhatsApp Inbox {pendingDrafts.length > 0 && `(${pendingDrafts.length})`}
+            </button>
+            <button
+              type="button"
+              className="dashboard-hidden-link-pill"
+              onClick={() => navigate('/projects')}
+            >
+              <Layers size={14} />
+              Projects
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
       {/* Platform Welcome Banner */}
       <section className="welcome-banner" aria-label="Single-User Workspace Overview Banner">
         <div className="banner-content">
@@ -898,6 +1049,8 @@ export const DashboardPage = () => {
               </div>
             </div>
           </section>
+        </>
+      )}
         </>
       )}
 
