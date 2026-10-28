@@ -4,11 +4,51 @@ import Sidebar from '../components/navigation/Sidebar';
 import TopNav from '../components/navigation/TopNav';
 import { ToastContainer } from '../components/ui/Toast';
 import { healthService } from '../services/healthService';
+import { PanelTopOpen } from 'lucide-react';
 
 export const MainLayout = () => {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('task_manager_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [isNavbarHidden, setIsNavbarHidden] = useState(() => {
+    try {
+      return localStorage.getItem('task_manager_navbar_hidden') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [apiStatus, setApiStatus] = useState({ status: 'checking', isConnected: false });
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('task_manager_sidebar_collapsed', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const toggleNavbar = () => {
+    setIsNavbarHidden((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('task_manager_navbar_hidden', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   // Periodically verify API health without intrusive polling
   useEffect(() => {
@@ -53,19 +93,49 @@ export const MainLayout = () => {
     <div className="app-shell">
       <Sidebar
         isCollapsed={isSidebarCollapsed}
-        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+        onToggleCollapse={toggleSidebar}
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
 
-      <div className={`app-main-layout ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-        <TopNav
-          onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
-          apiStatus={apiStatus}
-        />
+      <div
+        className={`app-main-layout ${isSidebarCollapsed ? 'sidebar-collapsed' : ''} ${
+          isNavbarHidden ? 'navbar-hidden' : ''
+        }`}
+      >
+        {!isNavbarHidden && (
+          <TopNav
+            onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
+            apiStatus={apiStatus}
+            onToggleNavbar={toggleNavbar}
+          />
+        )}
+
+        {isNavbarHidden && (
+          <button
+            type="button"
+            className="floating-show-navbar-btn"
+            onClick={toggleNavbar}
+            title="Show Top Navbar"
+            aria-label="Show Top Navbar"
+          >
+            <PanelTopOpen size={14} />
+            <span>Show Navbar</span>
+          </button>
+        )}
 
         <main className="app-content-area" role="main">
-          <Outlet context={{ apiStatus }} />
+          <Outlet
+            context={{
+              apiStatus,
+              isNavbarHidden,
+              setIsNavbarHidden,
+              toggleNavbar,
+              isSidebarCollapsed,
+              setIsSidebarCollapsed,
+              toggleSidebar
+            }}
+          />
         </main>
       </div>
 

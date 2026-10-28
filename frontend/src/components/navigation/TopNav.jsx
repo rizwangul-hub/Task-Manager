@@ -12,10 +12,11 @@ import {
   Shield,
   CheckCircle2,
   X,
-  LogOut
+  LogOut,
+  PanelTopClose
 } from 'lucide-react';
 
-export const TopNav = ({ onOpenMobileSidebar, apiStatus }) => {
+export const TopNav = ({ onOpenMobileSidebar, apiStatus, onToggleNavbar }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, role, logout } = useAuth();
@@ -147,6 +148,19 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus }) => {
             {apiStatus?.status === 'healthy' ? 'API Online' : apiStatus?.status === 'degraded' ? 'API (DB Offline)' : 'API Offline'}
           </span>
         </div>
+
+        {/* Hide Navbar Shortcut */}
+        {onToggleNavbar && (
+          <button
+            type="button"
+            className="header-icon-btn hide-navbar-header-btn desktop-only"
+            onClick={onToggleNavbar}
+            title="Hide Top Navbar"
+            aria-label="Hide Top Navbar"
+          >
+            <PanelTopClose size={17} />
+          </button>
+        )}
 
         {/* Notifications Dropdown */}
         <div className="header-menu-container" ref={notificationRef}>
