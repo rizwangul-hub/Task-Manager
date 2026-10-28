@@ -79,17 +79,19 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus }) => {
   };
 
   const handleBackToPortal = () => {
-    const portalUrl = 'https://pixx-tech.vercel.app'; // Central Portal URL
-    // If opened inside Central Portal iframe, notify parent or redirect top window
+    const PORTAL_URL = 'https://pixxtech.vercel.app';
+
+    // If inside Central Portal iframe, notify parent portal and redirect the main window
     if (window.top && window.top !== window.self) {
       try {
         window.top.postMessage('PIXXTECH_RETURN', '*');
-        window.top.location.href = portalUrl;
-      } catch {
-        window.location.href = portalUrl;
+        window.top.location.href = PORTAL_URL;
+      } catch (e) {
+        window.location.href = PORTAL_URL;
       }
     } else {
-      window.location.href = portalUrl;
+      // If opened directly in a browser tab
+      window.location.href = PORTAL_URL;
     }
   };
 
