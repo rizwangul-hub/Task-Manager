@@ -78,6 +78,21 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus }) => {
     }
   };
 
+  const handleBackToPortal = () => {
+    const portalUrl = 'https://pixx-tech.vercel.app'; // Central Portal URL
+    // If opened inside Central Portal iframe, notify parent or redirect top window
+    if (window.top && window.top !== window.self) {
+      try {
+        window.top.postMessage('PIXXTECH_RETURN', '*');
+        window.top.location.href = portalUrl;
+      } catch {
+        window.location.href = portalUrl;
+      }
+    } else {
+      window.location.href = portalUrl;
+    }
+  };
+
   return (
     <header className="app-header">
       <div className="header-left">
@@ -224,6 +239,18 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus }) => {
           )}
         </div>
 
+        {/* Back to Central Portal Button */}
+        <button
+          type="button"
+          onClick={handleBackToPortal}
+          className="back-to-portal-btn"
+          aria-label="Back to PixxTech Central Portal"
+          title="Return to PixxTech Central Portal"
+        >
+          <span className="portal-arrow">←</span>
+          <span>PixxTech Portal</span>
+        </button>
+
         {/* User Profile Menu */}
         <div className="header-menu-container" ref={userMenuRef}>
           <button
@@ -262,6 +289,15 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus }) => {
               </div>
 
               <div className="dropdown-divider" />
+
+              <button
+                type="button"
+                className="dropdown-portal-action"
+                onClick={handleBackToPortal}
+              >
+                <span style={{ fontSize: '14px', lineHeight: 1 }}>←</span>
+                <span>PixxTech Central Portal</span>
+              </button>
 
               <button
                 type="button"
