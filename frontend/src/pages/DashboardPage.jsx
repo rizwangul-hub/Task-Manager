@@ -866,7 +866,7 @@ export const DashboardPage = () => {
         icon={sidebarHidden ? PanelLeftOpen : PanelLeftClose}
         onClick={handleToggleSidebar}
         title={sidebarHidden ? 'Show sidebar navigation' : 'Hide sidebar and lock dashboard to single screen'}
-        className="toggle-sidebar-dashboard-btn"
+        className="toggle-sidebar-dashboard-btn desktop-only"
       >
         {sidebarHidden ? 'Show Sidebar' : 'Hide Sidebar'}
       </Button>

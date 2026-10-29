@@ -5882,18 +5882,54 @@ body {
    Sidebar Hidden & Seamless Zero-Scroll Dashboard
    ========================================================================== */
 
-.app-sidebar.sidebar-hidden {
-  transform: translateX(-100%) !important;
-  opacity: 0 !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, visibility 0.25s ease !important;
+/* Desktop-only: hide sidebar completely when toggled */
+@media (min-width: 1024px) {
+  .app-sidebar.sidebar-hidden {
+    transform: translateX(-100%) !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, visibility 0.25s ease !important;
+  }
+
+  .app-main-layout.sidebar-hidden {
+    margin-left: 0 !important;
+    width: 100% !important;
+    transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
 }
 
-.app-main-layout.sidebar-hidden {
-  margin-left: 0 !important;
-  width: 100% !important;
-  transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+/* Mobile: drawer behavior where mobile-open always takes precedence */
+@media (max-width: 1023px) {
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(280px, 85vw);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease-in-out;
+    z-index: 50;
+  }
+
+  .app-sidebar.mobile-open {
+    transform: translateX(0) !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(15, 23, 42, 0.65);
+    z-index: 45;
+    backdrop-filter: blur(3px);
+  }
 }
 
 .sidebar-toggle-navbar-btn {
@@ -5928,7 +5964,9 @@ body {
   background: rgba(56, 189, 248, 0.22);
 }
 
-/* Single-Screen Zero-Scroll Dashboard Layout */
+/* ==========================================================================
+   Desktop Single-Screen Zero-Scroll Dashboard Layout (min-width: 1024px)
+   ========================================================================== */
 @media (min-width: 1024px) {
   .app-main-layout.sidebar-hidden .app-content-area,
   .app-main-layout.sidebar-hidden .content-sidebar-hidden {
@@ -6033,18 +6071,65 @@ body {
   }
 }
 
-/* Compact KPI Ribbon */
+/* ==========================================================================
+   Mobile & Tablet Dashboard Layout (max-width: 1023px)
+   Full fluidity, 1-column responsive stacking, touch-friendly scrolling
+   ========================================================================== */
+@media (max-width: 1023px) {
+  .dashboard-fit-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+  }
+
+  .dashboard-grid-fit {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+  }
+
+  .fit-column {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+  }
+
+  .fit-column .dashboard-card {
+    width: 100%;
+    height: auto !important;
+    min-height: unset !important;
+    overflow: visible;
+  }
+
+  .fit-column .card-body {
+    overflow-y: visible !important;
+    max-height: unset !important;
+    padding: 16px 14px;
+  }
+}
+
+/* Compact KPI Ribbon (Fluid across desktop & mobile) */
 .dashboard-kpi-ribbon {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   background: #ffffff;
   border: 1px solid var(--border-light, #e2e8f0);
   border-radius: var(--radius-lg, 8px);
-  padding: 8px 16px;
+  padding: 8px 14px;
   box-shadow: var(--shadow-sm);
   flex-shrink: 0;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  max-width: 100%;
+}
+
+.dashboard-kpi-ribbon::-webkit-scrollbar {
+  display: none;
 }
 
 .kpi-ribbon-item {
@@ -6056,6 +6141,7 @@ body {
   background: #f8fafc;
   border: 1px solid #f1f5f9;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .kpi-ribbon-label {
@@ -6079,4 +6165,93 @@ body {
 .kpi-ribbon-value.overdue { color: #dc2626; }
 .kpi-ribbon-value.drafts { color: #9333ea; }
 .kpi-ribbon-value.groups { color: #0284c7; }
+
+/* ==========================================================================
+   Mobile Header & Page Navigation Rules (max-width: 768px)
+   ========================================================================== */
+@media (max-width: 768px) {
+  .app-header {
+    padding: 0 12px !important;
+    gap: 8px;
+  }
+
+  .header-left {
+    gap: 8px !important;
+    min-width: 0;
+    flex-shrink: 1;
+  }
+
+  .header-right {
+    gap: 6px !important;
+    flex-shrink: 0;
+  }
+
+  .breadcrumb-trail {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 130px;
+  }
+
+  .breadcrumb-root,
+  .breadcrumb-separator {
+    display: none !important;
+  }
+
+  .back-to-portal-btn {
+    padding: 5px 8px !important;
+    font-size: 11px !important;
+    gap: 4px;
+  }
+
+  .page-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+    padding-bottom: 12px;
+  }
+
+  .page-header-main {
+    width: 100%;
+  }
+
+  .page-header-actions {
+    width: 100%;
+  }
+
+  .header-action-group {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header-action-group .btn {
+    flex: 1 1 calc(50% - 4px);
+    justify-content: center;
+  }
+
+  .app-content-area {
+    padding: 12px !important;
+    width: 100% !important;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .breadcrumb-trail {
+    max-width: 90px;
+  }
+
+  .header-action-group .btn {
+    flex: 1 1 100%;
+  }
+}
 
