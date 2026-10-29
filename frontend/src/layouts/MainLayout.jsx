@@ -4,45 +4,24 @@ import Sidebar from '../components/navigation/Sidebar';
 import TopNav from '../components/navigation/TopNav';
 import { ToastContainer } from '../components/ui/Toast';
 import { healthService } from '../services/healthService';
-import { PanelTopOpen } from 'lucide-react';
 
 export const MainLayout = () => {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+  const [isSidebarHidden, setIsSidebarHidden] = useState(() => {
     try {
-      return localStorage.getItem('task_manager_sidebar_collapsed') === 'true';
+      return localStorage.getItem('task_manager_sidebar_hidden') === 'true';
     } catch {
       return false;
     }
   });
-
-  const [isNavbarHidden, setIsNavbarHidden] = useState(() => {
-    try {
-      return localStorage.getItem('task_manager_navbar_hidden') === 'true';
-    } catch {
-      return false;
-    }
-  });
-
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [apiStatus, setApiStatus] = useState({ status: 'checking', isConnected: false });
 
-  const toggleSidebar = () => {
-    setIsSidebarCollapsed((prev) => {
+  const toggleSidebarHidden = () => {
+    setIsSidebarHidden((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem('task_manager_sidebar_collapsed', String(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-  };
-
-  const toggleNavbar = () => {
-    setIsNavbarHidden((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem('task_manager_navbar_hidden', String(next));
+        localStorage.setItem('task_manager_sidebar_hidden', String(next));
       } catch {
         // ignore
       }
@@ -90,52 +69,25 @@ export const MainLayout = () => {
   }, []);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isSidebarHidden ? 'layout-sidebar-hidden' : ''}`}>
       <Sidebar
         isCollapsed={isSidebarCollapsed}
-        onToggleCollapse={toggleSidebar}
+        isHidden={isSidebarHidden}
+        onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
 
-      <div
-        className={`app-main-layout ${isSidebarCollapsed ? 'sidebar-collapsed' : ''} ${
-          isNavbarHidden ? 'navbar-hidden' : ''
-        }`}
-      >
-        {!isNavbarHidden && (
-          <TopNav
-            onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
-            apiStatus={apiStatus}
-            onToggleNavbar={toggleNavbar}
-          />
-        )}
+      <div className={`app-main-layout ${isSidebarCollapsed ? 'sidebar-collapsed' : ''} ${isSidebarHidden ? 'sidebar-hidden' : ''}`}>
+        <TopNav
+          onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
+          apiStatus={apiStatus}
+          isSidebarHidden={isSidebarHidden}
+          onToggleSidebar={toggleSidebarHidden}
+        />
 
-        {isNavbarHidden && (
-          <button
-            type="button"
-            className="floating-show-navbar-btn"
-            onClick={toggleNavbar}
-            title="Show Top Navbar"
-            aria-label="Show Top Navbar"
-          >
-            <PanelTopOpen size={14} />
-            <span>Show Navbar</span>
-          </button>
-        )}
-
-        <main className="app-content-area" role="main">
-          <Outlet
-            context={{
-              apiStatus,
-              isNavbarHidden,
-              setIsNavbarHidden,
-              toggleNavbar,
-              isSidebarCollapsed,
-              setIsSidebarCollapsed,
-              toggleSidebar
-            }}
-          />
+        <main className={`app-content-area ${isSidebarHidden ? 'content-sidebar-hidden' : ''}`} role="main">
+          <Outlet context={{ apiStatus, isSidebarHidden, toggleSidebar: toggleSidebarHidden }} />
         </main>
       </div>
 

@@ -13,10 +13,11 @@ import {
   CheckCircle2,
   X,
   LogOut,
-  PanelTopClose
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 
-export const TopNav = ({ onOpenMobileSidebar, apiStatus, onToggleNavbar }) => {
+export const TopNav = ({ onOpenMobileSidebar, apiStatus, isSidebarHidden, onToggleSidebar }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, role, logout } = useAuth();
@@ -108,6 +109,17 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus, onToggleNavbar }) => {
           <Menu size={20} />
         </button>
 
+        <button
+          type="button"
+          className={`sidebar-toggle-navbar-btn desktop-only ${isSidebarHidden ? 'is-collapsed' : ''}`}
+          onClick={onToggleSidebar}
+          title={isSidebarHidden ? "Show Sidebar" : "Hide Sidebar"}
+          aria-label={isSidebarHidden ? "Show Sidebar" : "Hide Sidebar"}
+        >
+          {isSidebarHidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          <span className="sidebar-toggle-label">{isSidebarHidden ? 'Show Sidebar' : 'Hide Sidebar'}</span>
+        </button>
+
         <div className="breadcrumb-trail">
           <span className="breadcrumb-root">Task Manager</span>
           <span className="breadcrumb-separator">/</span>
@@ -148,19 +160,6 @@ export const TopNav = ({ onOpenMobileSidebar, apiStatus, onToggleNavbar }) => {
             {apiStatus?.status === 'healthy' ? 'API Online' : apiStatus?.status === 'degraded' ? 'API (DB Offline)' : 'API Offline'}
           </span>
         </div>
-
-        {/* Hide Navbar Shortcut */}
-        {onToggleNavbar && (
-          <button
-            type="button"
-            className="header-icon-btn hide-navbar-header-btn desktop-only"
-            onClick={onToggleNavbar}
-            title="Hide Top Navbar"
-            aria-label="Hide Top Navbar"
-          >
-            <PanelTopClose size={17} />
-          </button>
-        )}
 
         {/* Notifications Dropdown */}
         <div className="header-menu-container" ref={notificationRef}>

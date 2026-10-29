@@ -19,6 +19,7 @@ import {
 
 export const Sidebar = ({
   isCollapsed,
+  isHidden,
   onToggleCollapse,
   isMobileOpen,
   onCloseMobile
@@ -50,7 +51,7 @@ export const Sidebar = ({
       )}
 
       <aside
-        className={`app-sidebar ${isCollapsed ? 'collapsed' : ''} ${isMobileOpen ? 'mobile-open' : ''}`}
+        className={`app-sidebar ${isCollapsed ? 'collapsed' : ''} ${isHidden ? 'sidebar-hidden' : ''} ${isMobileOpen ? 'mobile-open' : ''}`}
         aria-label="Sidebar Navigation"
       >
         <div className="sidebar-brand">

@@ -46,20 +46,12 @@ import {
   Pause,
   ExternalLink,
   Inbox,
-  PanelTopClose,
-  PanelTopOpen,
   PanelLeftClose,
   PanelLeftOpen
 } from 'lucide-react';
 
 export const DashboardPage = () => {
-  const {
-    apiStatus,
-    isNavbarHidden,
-    toggleNavbar,
-    isSidebarCollapsed,
-    toggleSidebar
-  } = useOutletContext() || {};
+  const { apiStatus, isSidebarHidden, toggleSidebar } = useOutletContext() || {};
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -68,6 +60,45 @@ export const DashboardPage = () => {
   const [stats, setStats] = useState(null);
   const [isHealthModalOpen, setIsHealthModalOpen] = useState(false);
   const { toast } = useToast();
+
+  const [localSidebarHidden, setLocalSidebarHidden] = useState(() => {
+    try {
+      return localStorage.getItem('task_manager_sidebar_hidden') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const sidebarHidden = isSidebarHidden !== undefined ? isSidebarHidden : localSidebarHidden;
+
+  const handleToggleSidebar = useCallback(() => {
+    if (toggleSidebar) {
+      toggleSidebar();
+    } else {
+      setLocalSidebarHidden((prev) => {
+        const next = !prev;
+        try {
+          localStorage.setItem('task_manager_sidebar_hidden', String(next));
+        } catch {}
+        return next;
+      });
+    }
+  }, [toggleSidebar]);
+
+  // Lock overflow when sidebar is hidden on desktop (min-width: 1024px) so that zero scrolling occurs
+  useEffect(() => {
+    if (sidebarHidden && typeof window !== 'undefined' && window.innerWidth >= 1024) {
+      const origHtmlOverflow = document.documentElement.style.overflow;
+      const origBodyOverflow = document.body.style.overflow;
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+
+      return () => {
+        document.documentElement.style.overflow = origHtmlOverflow;
+        document.body.style.overflow = origBodyOverflow;
+      };
+    }
+  }, [sidebarHidden]);
 
   // WhatsApp Groups State
   const [groups, setGroups] = useState([]);
@@ -389,32 +420,456 @@ export const DashboardPage = () => {
     }
   ];
 
+  const renderRecentActivity = (isCompact = false) => (
+    <div className={`dashboard-card recent-activity-card ${isCompact ? 'card-compact' : ''}`}>
+      <div className="card-header">
+        <div className="card-header-title">
+          <Activity size={18} className="card-title-icon" />
+          <h3>Recent Task Activity</h3>
+        </div>
+        <span className="card-tag">Live Feed</span>
+      </div>
+      <div className="card-body">
+        {recentActivity.length === 0 ? (
+          <EmptyState
+            icon={Activity}
+            title="No Recent Tasks Logged"
+            description="Create projects and assign tasks to view live activity transitions in this feed."
+          />
+        ) : (
+          <div className="activity-list">
+            {recentActivity.map((task) => (
+              <div key={task._id} className="activity-item">
+                <div className="activity-meta">
+                  <span className="activity-key">{task.taskKey}</span>
+                  <span className="activity-title">{task.title}</span>
+                </div>
+                <StatusBadge status={task.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderUpcomingDeadlines = (isCompact = false) => (
+    <div className={`dashboard-card upcoming-deadlines-card ${isCompact ? 'card-compact' : ''}`}>
+      <div className="card-header">
+        <div className="card-header-title">
+          <Calendar size={18} className="card-title-icon" />
+          <h3>Upcoming Deadlines</h3>
+        </div>
+        <span className="card-tag">Timeline</span>
+      </div>
+      <div className="card-body">
+        {upcomingDeadlines.length === 0 ? (
+          <EmptyState
+            icon={Calendar}
+            title="No Scheduled Deadlines"
+            description="Tasks with target due dates will automatically appear in chronological sequence here."
+          />
+        ) : (
+          <div className="deadlines-list">
+            {upcomingDeadlines.map((task) => (
+              <div key={task._id} className="deadline-item">
+                <div className="deadline-left">
+                  <span className="deadline-task">{task.title}</span>
+                  <span className="deadline-project">{task.project?.name || 'Project'}</span>
+                </div>
+                <span className="deadline-date">
+                  {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No date'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderStatusDistribution = (isCompact = false) => (
+    <div className={`dashboard-card status-distribution-card ${isCompact ? 'card-compact' : ''}`}>
+      <div className="card-header">
+        <div className="card-header-title">
+          <PieChart size={18} className="card-title-icon" />
+          <h3>Task Status Distribution</h3>
+        </div>
+        <span className="card-tag">Breakdown</span>
+      </div>
+      <div className="card-body">
+        {metrics.totalTasks === 0 ? (
+          <EmptyState
+            icon={PieChart}
+            title="No Tasks for Distribution"
+            description="Task status distributions will automatically populate as deliverables move through workflow states."
+          />
+        ) : (
+          <div className="status-bars-container">
+            {Object.entries(statusDistribution).map(([statusKey, count]) => (
+              <div key={statusKey} className="status-bar-row">
+                <span className="status-bar-label">{statusKey}</span>
+                <div className="status-bar-track">
+                  <div
+                    className="status-bar-fill"
+                    style={{
+                      width: `${metrics.totalTasks > 0 ? (count / metrics.totalTasks) * 100 : 0}%`
+                    }}
+                  />
+                </div>
+                <span className="status-bar-count">{count}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderWorkspaceModules = (isCompact = false) => (
+    <div className={`dashboard-card team-workload-card ${isCompact ? 'card-compact' : ''}`}>
+      <div className="card-header">
+        <div className="card-header-title">
+          <Layers size={18} className="card-title-icon" />
+          <h3>Workspace Modules</h3>
+        </div>
+        <span className="card-tag">Quick Jump</span>
+      </div>
+      <div className="card-body">
+        <div className="quick-access-grid">
+          <button
+            type="button"
+            className="quick-access-item"
+            onClick={() => navigate('/my-work')}
+          >
+            <span>My Assigned Work</span>
+            <ArrowRight size={16} />
+          </button>
+          <button
+            type="button"
+            className="quick-access-item"
+            onClick={() => navigate('/projects')}
+          >
+            <span>Projects Portfolio</span>
+            <ArrowRight size={16} />
+          </button>
+          <button
+            type="button"
+            className="quick-access-item"
+            onClick={() => navigate('/all-tasks')}
+          >
+            <span>All Tasks Board</span>
+            <ArrowRight size={16} />
+          </button>
+          <button
+            type="button"
+            className="quick-access-item"
+            onClick={() => navigate('/reports')}
+          >
+            <span>Reports & Analytics</span>
+            <ArrowRight size={16} />
+          </button>
+          <button
+            type="button"
+            className="quick-access-item"
+            onClick={() => navigate('/whatsapp-inbox')}
+          >
+            <span>WhatsApp Task Inbox</span>
+            <ArrowRight size={16} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderWhatsAppGroups = (isCompact = false) => (
+    <div
+      className={`dashboard-card whatsapp-groups-card ${isCompact ? 'card-compact' : ''}`}
+      style={isCompact ? {} : { gridColumn: '1 / -1' }}
+    >
+      <div className="card-header">
+        <div className="card-header-title">
+          <Users size={18} className="card-title-icon" />
+          <h3>WhatsApp Groups (Monitoring)</h3>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <span className="card-tag">
+            {groups.filter((g) => g.isMonitored).length} Monitored
+          </span>
+          <Button
+            variant="secondary"
+            size="small"
+            icon={RefreshCw}
+            onClick={fetchGroups}
+            isLoading={loadingGroups}
+          >
+            Refresh
+          </Button>
+        </div>
+      </div>
+      <div className="card-body" style={{ padding: isCompact ? '0.75rem' : '1rem' }}>
+        {!isCompact && (
+          <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: '#64748b' }}>
+            Select existing WhatsApp groups from your connected account to monitor for task instructions. New work requests from monitored groups are automatically analyzed with Gemini AI and prepared as drafts below for your approval.
+          </p>
+        )}
+
+        {loadingGroups ? (
+          <p className="text-muted" style={{ fontSize: '0.875rem' }}>Fetching WhatsApp groups from active session...</p>
+        ) : groups.length === 0 ? (
+          <EmptyState
+            icon={Users}
+            title="No WhatsApp Groups Found"
+            description="Ensure your WhatsApp account is paired in Settings, and belongs to at least one group chat."
+          />
+        ) : (
+          <div style={{ overflowX: 'auto', width: '100%' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: isCompact ? '0.78rem' : '0.85rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)', textAlign: 'left', color: '#64748b' }}>
+                  <th style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem' }}>Group Name</th>
+                  {!isCompact && <th style={{ padding: '0.6rem 0.5rem' }}>Group JID</th>}
+                  <th style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem' }}>Members</th>
+                  {!isCompact && <th style={{ padding: '0.6rem 0.5rem' }}>Last Activity</th>}
+                  <th style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem', textAlign: 'center' }}>Status</th>
+                  <th style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem', textAlign: 'center' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((group) => {
+                  const isToggling = togglingJid === group.groupJid;
+                  return (
+                    <tr key={group.groupJid} style={{ borderBottom: '1px solid var(--border-color, #f1f5f9)' }}>
+                      <td style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem', fontWeight: 500, color: 'var(--text-primary, #0f172a)' }}>
+                        <span title={group.groupName}>{group.groupName}</span>
+                      </td>
+                      {!isCompact && (
+                        <td style={{ padding: '0.6rem 0.5rem', fontFamily: 'monospace', color: '#64748b', fontSize: '0.78rem' }}>
+                          {group.groupJid}
+                        </td>
+                      )}
+                      <td style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem', color: '#64748b' }}>
+                        {group.participantCount || 0}
+                      </td>
+                      {!isCompact && (
+                        <td style={{ padding: '0.6rem 0.5rem', color: '#64748b', fontSize: '0.8rem' }}>
+                          {group.lastMessageAt ? new Date(group.lastMessageAt).toLocaleString() : 'No messages'}
+                        </td>
+                      )}
+                      <td style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem', textAlign: 'center' }}>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '2px 6px',
+                            borderRadius: '12px',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            background: !group.isMonitored
+                              ? '#f1f5f9'
+                              : group.isPaused
+                                ? '#fef3c7'
+                                : '#dcfce7',
+                            color: !group.isMonitored
+                              ? '#64748b'
+                              : group.isPaused
+                                ? '#b45309'
+                                : '#15803d'
+                          }}
+                        >
+                          {!group.isMonitored
+                            ? 'OFF'
+                            : group.isPaused
+                              ? 'PAUSED'
+                              : 'ACTIVE'}
+                        </span>
+                      </td>
+                      <td style={{ padding: isCompact ? '0.4rem 0.35rem' : '0.6rem 0.5rem', textAlign: 'center' }}>
+                        <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center' }}>
+                          {group.isMonitored && (
+                            <button
+                              type="button"
+                              onClick={() => handleTogglePause(group)}
+                              disabled={isToggling}
+                              title={group.isPaused ? 'Resume monitoring' : 'Pause monitoring'}
+                              style={{
+                                padding: '0.18rem 0.45rem',
+                                borderRadius: '4px',
+                                border: '1px solid #cbd5e1',
+                                background: '#ffffff',
+                                cursor: isToggling ? 'not-allowed' : 'pointer',
+                                fontSize: '0.72rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                color: '#334155'
+                              }}
+                            >
+                              {group.isPaused ? <Play size={10} /> : <Pause size={10} />}
+                              {group.isPaused ? 'Resume' : 'Pause'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleMonitoring(group)}
+                            disabled={isToggling}
+                            style={{
+                              padding: '0.18rem 0.6rem',
+                              borderRadius: '14px',
+                              border: 'none',
+                              cursor: isToggling ? 'not-allowed' : 'pointer',
+                              fontWeight: 600,
+                              fontSize: '0.72rem',
+                              background: group.isMonitored ? '#ef4444' : '#16a34a',
+                              color: '#ffffff',
+                              transition: 'all 0.2s'
+                            }}
+                          >
+                            {isToggling
+                              ? '...'
+                              : group.isMonitored
+                                ? 'DISABLE'
+                                : 'ENABLE'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderPendingDrafts = (isCompact = false) => (
+    <div
+      className={`dashboard-card pending-drafts-card ${isCompact ? 'card-compact' : ''}`}
+      style={isCompact ? {} : { gridColumn: '1 / -1' }}
+    >
+      <div className="card-header">
+        <div className="card-header-title">
+          <MessageSquare size={18} className="card-title-icon" />
+          <h3>Pending WhatsApp Task Drafts</h3>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <span className="card-tag">
+            {pendingDrafts.length} Awaiting Review
+          </span>
+          <Button
+            variant="ghost"
+            size="small"
+            icon={ExternalLink}
+            onClick={() => navigate('/whatsapp-inbox')}
+          >
+            Inbox
+          </Button>
+        </div>
+      </div>
+      <div className="card-body" style={{ padding: isCompact ? '0.75rem' : '1rem' }}>
+        {loadingDrafts ? (
+          <p className="text-muted" style={{ fontSize: '0.875rem' }}>Loading pending task drafts...</p>
+        ) : pendingDrafts.length === 0 ? (
+          <EmptyState
+            icon={Inbox}
+            title="No Pending Task Drafts"
+            description="When work instructions or tasks are posted in your monitored WhatsApp groups, drafts will queue here for review."
+          />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: isCompact ? '0.5rem' : '0.75rem' }}>
+            {pendingDrafts.map((draft) => {
+              const title = draft.editableFields?.title || draft.aiExtraction?.title || draft.rawMessageText?.slice(0, 80) || 'Untitled Task Draft';
+              const priority = draft.editableFields?.priority || draft.aiExtraction?.priority || 'Medium';
+              const dueDate = draft.editableFields?.dueDate || draft.aiExtraction?.dueDate;
+              const assignee = draft.editableFields?.assigneeName || draft.aiExtraction?.assigneeName;
+              const confidence = draft.aiExtraction?.confidence !== undefined ? Math.round(draft.aiExtraction.confidence * 100) : null;
+
+              return (
+                <div
+                  key={draft._id}
+                  style={{
+                    border: '1px solid var(--border-color, #e2e8f0)',
+                    borderRadius: '8px',
+                    padding: isCompact ? '0.6rem 0.8rem' : '0.85rem 1rem',
+                    background: '#ffffff',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: isCompact ? '0.35rem' : '0.5rem'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <StatusBadge status="pending" label="AWAITING REVIEW" />
+                      {confidence !== null && (
+                        <span style={{ fontSize: '0.72rem', background: '#f1f5f9', padding: '1px 5px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '2px', color: '#475569' }}>
+                          <Sparkles size={10} color="#f59e0b" />
+                          {confidence}% AI
+                        </span>
+                      )}
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                      {draft.groupName || 'WhatsApp Group'} &bull; {new Date(draft.messageTimestamp).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: isCompact ? '0.9rem' : '1rem', fontWeight: 600, color: 'var(--text-primary, #0f172a)' }}>
+                    {title}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.75rem', padding: '1px 5px', borderRadius: '4px', background: '#fef3c7', color: '#92400e' }}>
+                      ⚡ {priority}
+                    </span>
+                    {dueDate && (
+                      <span style={{ fontSize: '0.75rem', padding: '1px 5px', borderRadius: '4px', background: '#f3e8ff', color: '#6b21a8' }}>
+                        📅 {new Date(dueDate).toLocaleDateString()}
+                      </span>
+                    )}
+                    {assignee && (
+                      <span style={{ fontSize: '0.75rem', padding: '1px 5px', borderRadius: '4px', background: '#ecfdf5', color: '#047857', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                        <UserIcon size={10} /> {assignee}
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ background: 'var(--bg-subtle, #f8fafc)', borderLeft: '3px solid #3b82f6', padding: '0.35rem 0.5rem', borderRadius: '0 4px 4px 0', fontSize: '0.78rem', color: '#475569', fontFamily: 'monospace' }}>
+                    {draft.rawMessageText?.length > 120 ? `${draft.rawMessageText.slice(0, 120)}...` : draft.rawMessageText}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
+                    <Button
+                      variant="primary"
+                      size="small"
+                      icon={Eye}
+                      onClick={() => handleOpenReview(draft)}
+                    >
+                      Review & Approve
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const pageActions = (
     <div className="header-action-group">
-      {/* Hide / Show Navbar Toggle Button */}
       <Button
-        variant={isNavbarHidden ? 'primary' : 'outline'}
+        variant={sidebarHidden ? 'primary' : 'outline'}
         size="md"
-        icon={isNavbarHidden ? PanelTopOpen : PanelTopClose}
-        onClick={toggleNavbar}
-        title={isNavbarHidden ? 'Show top navbar' : 'Hide top navbar for more workspace'}
-        className="navbar-toggle-btn"
+        icon={sidebarHidden ? PanelLeftOpen : PanelLeftClose}
+        onClick={handleToggleSidebar}
+        title={sidebarHidden ? 'Show sidebar navigation' : 'Hide sidebar and lock dashboard to single screen'}
+        className="toggle-sidebar-dashboard-btn"
       >
-        {isNavbarHidden ? 'Show Navbar' : 'Hide Navbar'}
+        {sidebarHidden ? 'Show Sidebar' : 'Hide Sidebar'}
       </Button>
-
-      {/* Hide / Show Sidebar Toggle Button */}
-      <Button
-        variant={isSidebarCollapsed ? 'primary' : 'outline'}
-        size="md"
-        icon={isSidebarCollapsed ? PanelLeftOpen : PanelLeftClose}
-        onClick={toggleSidebar}
-        title={isSidebarCollapsed ? 'Expand sidebar' : 'Hide sidebar for fit-to-screen view without scrolling'}
-        className="sidebar-toggle-btn desktop-only"
-      >
-        {isSidebarCollapsed ? 'Expand Sidebar' : 'Hide Sidebar'}
-      </Button>
-
       <Button
         variant="outline"
         size="md"
@@ -438,48 +893,19 @@ export const DashboardPage = () => {
     <PageContainer
       title={`Welcome back, ${user?.name || 'Manager'}`}
       subtitle={
-        isSidebarCollapsed
-          ? 'Full-fit view active — zero page scroll with internal widget scrolling.'
+        sidebarHidden
+          ? 'Single-screen command center • Zero-scroll dashboard view active.'
           : 'Operational workspace overview for your deliverables and projects.'
       }
       badge={
         <StatusBadge
-          status={isSidebarCollapsed ? 'active' : 'neutral'}
-          label={isSidebarCollapsed ? 'Fit Screen View' : 'Workspace Owner'}
+          status="active"
+          label={sidebarHidden ? 'Expanded View' : 'Workspace Owner'}
         />
       }
       actions={pageActions}
-      className={`dashboard-page ${isSidebarCollapsed ? 'dashboard-fit-mode' : ''}`}
+      className={sidebarHidden ? 'dashboard-page-fit-screen' : ''}
     >
-      {/* Platform Welcome Banner */}
-      <section className="welcome-banner" aria-label="Single-User Workspace Overview Banner">
-        <div className="banner-content">
-          <div className="banner-badge">
-            <Sparkles size={14} className="banner-badge-icon" />
-            <span>Single-User Mode • Private Workspace</span>
-          </div>
-          <h2 className="banner-title">Personal Workspace Operations</h2>
-          <p className="banner-text">
-            Your private task workspace with real-time tracking, calendar, kanban, and audited deliverables.
-          </p>
-        </div>
-        <div className="banner-meta">
-          <div className="banner-stat">
-            <span className="banner-stat-label">API Health</span>
-            <span className="banner-stat-value">
-              <StatusBadge
-                status={apiStatus?.status === 'healthy' ? 'healthy' : apiStatus?.status === 'degraded' ? 'degraded' : 'offline'}
-              />
-            </span>
-          </div>
-          <div className="banner-stat">
-            <span className="banner-stat-label">Active Projects</span>
-            <span className="banner-stat-value">{metrics.totalProjects || 0}</span>
-          </div>
-        </div>
-      </section>
-
-      {/* Loading & Error States */}
       {loading && <LoadingState message="Loading live operational metrics..." />}
 
       {error && (
@@ -490,460 +916,129 @@ export const DashboardPage = () => {
         />
       )}
 
-      {/* KPI Stat Cards Grid */}
       {!loading && !error && (
-        <>
-          <section className="stats-grid" aria-label="Task Status Summary">
-            {summaryCards.map((metric) => (
-              <StatCard
-                key={metric.title}
-                title={metric.title}
-                value={metric.value}
-                icon={metric.icon}
-                variant={metric.variant}
-                badgeText={metric.badgeText}
-                description={metric.description}
-                isSetupState={metric.isSetupState}
-              />
-            ))}
-          </section>
-
-          {/* Dashboard Modules Grid */}
-          <section className="dashboard-grid">
-            {/* Recent Activity */}
-            <div className="dashboard-card recent-activity-card">
-              <div className="card-header">
-                <div className="card-header-title">
-                  <Activity size={18} className="card-title-icon" />
-                  <h3>Recent Task Activity</h3>
-                </div>
-                <span className="card-tag">Live Feed</span>
+        sidebarHidden ? (
+          /* Single-Screen Zero-Scroll Dashboard Layout */
+          <div className="dashboard-fit-wrapper">
+            {/* Compact KPI Ribbon */}
+            <div className="dashboard-kpi-ribbon" role="region" aria-label="Key Performance Indicators">
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">Total</span>
+                <span className="kpi-ribbon-value">{metrics.totalTasks || 0}</span>
               </div>
-              <div className="card-body">
-                {recentActivity.length === 0 ? (
-                  <EmptyState
-                    icon={Activity}
-                    title="No Recent Tasks Logged"
-                    description="Create projects and assign tasks to view live activity transitions in this feed."
-                  />
-                ) : (
-                  <div className="activity-list">
-                    {recentActivity.map((task) => (
-                      <div key={task._id} className="activity-item">
-                        <div className="activity-meta">
-                          <span className="activity-key">{task.taskKey}</span>
-                          <span className="activity-title">{task.title}</span>
-                        </div>
-                        <StatusBadge status={task.status} />
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">Pending</span>
+                <span className="kpi-ribbon-value pending">{metrics.pending || 0}</span>
+              </div>
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">In Progress</span>
+                <span className="kpi-ribbon-value in-progress">{metrics.inProgress || 0}</span>
+              </div>
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">In Review</span>
+                <span className="kpi-ribbon-value in-review">{metrics.inReview || 0}</span>
+              </div>
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">Completed</span>
+                <span className="kpi-ribbon-value completed">{metrics.completed || 0}</span>
+              </div>
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">Overdue</span>
+                <span className="kpi-ribbon-value overdue">{metrics.overdue || 0}</span>
+              </div>
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">WhatsApp Drafts</span>
+                <span className="kpi-ribbon-value drafts">{pendingDrafts.length}</span>
+              </div>
+              <div className="kpi-ribbon-item">
+                <span className="kpi-ribbon-label">Groups</span>
+                <span className="kpi-ribbon-value groups">{groups.filter((g) => g.isMonitored).length}</span>
+              </div>
+              <div className="kpi-ribbon-item" style={{ marginLeft: 'auto' }}>
+                <span className="kpi-ribbon-label">API</span>
+                <StatusBadge
+                  status={apiStatus?.status === 'healthy' ? 'healthy' : apiStatus?.status === 'degraded' ? 'degraded' : 'offline'}
+                  label={apiStatus?.status === 'healthy' ? 'ONLINE' : 'OFFLINE'}
+                />
               </div>
             </div>
 
-            {/* Upcoming Deadlines */}
-            <div className="dashboard-card upcoming-deadlines-card">
-              <div className="card-header">
-                <div className="card-header-title">
-                  <Calendar size={18} className="card-title-icon" />
-                  <h3>Upcoming Deadlines</h3>
-                </div>
-                <span className="card-tag">Timeline</span>
+            {/* 3-Column Zero-Scroll Grid */}
+            <div className="dashboard-grid-fit">
+              {/* Column 1: Tasks Feed */}
+              <div className="fit-column">
+                {renderRecentActivity(true)}
+                {renderUpcomingDeadlines(true)}
               </div>
-              <div className="card-body">
-                {upcomingDeadlines.length === 0 ? (
-                  <EmptyState
-                    icon={Calendar}
-                    title="No Scheduled Deadlines"
-                    description="Tasks with target due dates will automatically appear in chronological sequence here."
-                  />
-                ) : (
-                  <div className="deadlines-list">
-                    {upcomingDeadlines.map((task) => (
-                      <div key={task._id} className="deadline-item">
-                        <div className="deadline-left">
-                          <span className="deadline-task">{task.title}</span>
-                          <span className="deadline-project">{task.project?.name || 'Project'}</span>
-                        </div>
-                        <span className="deadline-date">
-                          {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No date'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+
+              {/* Column 2: Workload & Navigation */}
+              <div className="fit-column">
+                {renderStatusDistribution(true)}
+                {renderWorkspaceModules(true)}
+              </div>
+
+              {/* Column 3: WhatsApp Automation */}
+              <div className="fit-column fit-column-wide">
+                {renderPendingDrafts(true)}
+                {renderWhatsAppGroups(true)}
               </div>
             </div>
-
-            {/* Task Status Distribution */}
-            <div className="dashboard-card status-distribution-card">
-              <div className="card-header">
-                <div className="card-header-title">
-                  <PieChart size={18} className="card-title-icon" />
-                  <h3>Task Status Distribution</h3>
+          </div>
+        ) : (
+          /* Standard Flowing Dashboard Layout */
+          <>
+            <section className="welcome-banner" aria-label="Single-User Workspace Overview Banner">
+              <div className="banner-content">
+                <div className="banner-badge">
+                  <Sparkles size={14} className="banner-badge-icon" />
+                  <span>Single-User Mode • Private Workspace</span>
                 </div>
-                <span className="card-tag">Breakdown</span>
-              </div>
-              <div className="card-body">
-                {metrics.totalTasks === 0 ? (
-                  <EmptyState
-                    icon={PieChart}
-                    title="No Tasks for Distribution"
-                    description="Task status distributions will automatically populate as deliverables move through workflow states."
-                  />
-                ) : (
-                  <div className="status-bars-container">
-                    {Object.entries(statusDistribution).map(([statusKey, count]) => (
-                      <div key={statusKey} className="status-bar-row">
-                        <span className="status-bar-label">{statusKey}</span>
-                        <div className="status-bar-track">
-                          <div
-                            className="status-bar-fill"
-                            style={{
-                              width: `${metrics.totalTasks > 0 ? (count / metrics.totalTasks) * 100 : 0}%`
-                            }}
-                          />
-                        </div>
-                        <span className="status-bar-count">{count}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Workspace Navigation & Quick Access */}
-            <div className="dashboard-card team-workload-card">
-              <div className="card-header">
-                <div className="card-header-title">
-                  <Layers size={18} className="card-title-icon" />
-                  <h3>Workspace Modules</h3>
-                </div>
-                <span className="card-tag">Quick Jump</span>
-              </div>
-              <div className="card-body">
-                <div className="quick-access-grid">
-                  <button
-                    type="button"
-                    className="quick-access-item"
-                    onClick={() => navigate('/my-work')}
-                  >
-                    <span>My Assigned Work</span>
-                    <ArrowRight size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="quick-access-item"
-                    onClick={() => navigate('/projects')}
-                  >
-                    <span>Projects Portfolio</span>
-                    <ArrowRight size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="quick-access-item"
-                    onClick={() => navigate('/all-tasks')}
-                  >
-                    <span>All Tasks Board</span>
-                    <ArrowRight size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="quick-access-item"
-                    onClick={() => navigate('/reports')}
-                  >
-                    <span>Reports & Analytics</span>
-                    <ArrowRight size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="quick-access-item"
-                    onClick={() => navigate('/whatsapp-inbox')}
-                  >
-                    <span>WhatsApp Task Inbox</span>
-                    <ArrowRight size={16} />
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* WhatsApp Groups Monitoring Card */}
-            <div className="dashboard-card whatsapp-groups-card">
-              <div className="card-header">
-                <div className="card-header-title">
-                  <Users size={18} className="card-title-icon" />
-                  <h3>WhatsApp Groups (Group Monitoring)</h3>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <span className="card-tag">
-                    {groups.filter((g) => g.isMonitored).length} Monitored
-                  </span>
-                  <Button
-                    variant="secondary"
-                    size="small"
-                    icon={RefreshCw}
-                    onClick={fetchGroups}
-                    isLoading={loadingGroups}
-                  >
-                    Refresh Groups
-                  </Button>
-                </div>
-              </div>
-              <div className="card-body" style={{ padding: '1rem' }}>
-                <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: '#64748b' }}>
-                  Select existing WhatsApp groups from your connected account to monitor for task instructions. New work requests from monitored groups are automatically analyzed with Gemini AI and prepared as drafts below for your approval.
+                <h2 className="banner-title">Personal Workspace Operations</h2>
+                <p className="banner-text">
+                  Your private task workspace with real-time tracking, calendar, kanban, and audited deliverables.
                 </p>
-
-                {loadingGroups ? (
-                  <p className="text-muted" style={{ fontSize: '0.875rem' }}>Fetching WhatsApp groups from active session...</p>
-                ) : groups.length === 0 ? (
-                  <EmptyState
-                    icon={Users}
-                    title="No WhatsApp Groups Found"
-                    description="Ensure your WhatsApp account is paired and connected in Settings, and that your account belongs to at least one group chat."
-                  />
-                ) : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                      <thead>
-                        <tr style={{ borderBottom: '1px solid var(--border-color, #e2e8f0)', textAlign: 'left', color: '#64748b' }}>
-                          <th style={{ padding: '0.6rem 0.5rem' }}>Group Name</th>
-                          <th style={{ padding: '0.6rem 0.5rem' }}>Group JID</th>
-                          <th style={{ padding: '0.6rem 0.5rem' }}>Members</th>
-                          <th style={{ padding: '0.6rem 0.5rem' }}>Last Activity</th>
-                          <th style={{ padding: '0.6rem 0.5rem', textAlign: 'center' }}>Status</th>
-                          <th style={{ padding: '0.6rem 0.5rem', textAlign: 'center' }}>Monitoring Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {groups.map((group) => {
-                          const isToggling = togglingJid === group.groupJid;
-                          return (
-                            <tr key={group.groupJid} style={{ borderBottom: '1px solid var(--border-color, #f1f5f9)' }}>
-                              <td style={{ padding: '0.6rem 0.5rem', fontWeight: 500, color: 'var(--text-primary, #0f172a)' }}>
-                                {group.groupName}
-                              </td>
-                              <td style={{ padding: '0.6rem 0.5rem', fontFamily: 'monospace', color: '#64748b', fontSize: '0.78rem' }}>
-                                {group.groupJid}
-                              </td>
-                              <td style={{ padding: '0.6rem 0.5rem', color: '#64748b' }}>
-                                {group.participantCount || 0}
-                              </td>
-                              <td style={{ padding: '0.6rem 0.5rem', color: '#64748b', fontSize: '0.8rem' }}>
-                                {group.lastMessageAt ? new Date(group.lastMessageAt).toLocaleString() : 'No messages yet'}
-                              </td>
-                              <td style={{ padding: '0.6rem 0.5rem', textAlign: 'center' }}>
-                                <span
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px',
-                                    padding: '2px 8px',
-                                    borderRadius: '12px',
-                                    fontSize: '0.75rem',
-                                    fontWeight: 600,
-                                    background: !group.isMonitored
-                                      ? '#f1f5f9'
-                                      : group.isPaused
-                                        ? '#fef3c7'
-                                        : '#dcfce7',
-                                    color: !group.isMonitored
-                                      ? '#64748b'
-                                      : group.isPaused
-                                        ? '#b45309'
-                                        : '#15803d'
-                                  }}
-                                >
-                                  {!group.isMonitored
-                                    ? 'DISABLED'
-                                    : group.isPaused
-                                      ? 'PAUSED'
-                                      : 'ACTIVE'}
-                                </span>
-                              </td>
-                              <td style={{ padding: '0.6rem 0.5rem', textAlign: 'center' }}>
-                                <div style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center' }}>
-                                  {group.isMonitored && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleTogglePause(group)}
-                                      disabled={isToggling}
-                                      title={group.isPaused ? 'Resume monitoring' : 'Pause monitoring'}
-                                      style={{
-                                        padding: '0.2rem 0.5rem',
-                                        borderRadius: '4px',
-                                        border: '1px solid #cbd5e1',
-                                        background: '#ffffff',
-                                        cursor: isToggling ? 'not-allowed' : 'pointer',
-                                        fontSize: '0.75rem',
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '4px',
-                                        color: '#334155'
-                                      }}
-                                    >
-                                      {group.isPaused ? <Play size={12} /> : <Pause size={12} />}
-                                      {group.isPaused ? 'Resume' : 'Pause'}
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleToggleMonitoring(group)}
-                                    disabled={isToggling}
-                                    style={{
-                                      padding: '0.25rem 0.75rem',
-                                      borderRadius: '20px',
-                                      border: 'none',
-                                      cursor: isToggling ? 'not-allowed' : 'pointer',
-                                      fontWeight: 600,
-                                      fontSize: '0.75rem',
-                                      background: group.isMonitored ? '#ef4444' : '#16a34a',
-                                      color: '#ffffff',
-                                      transition: 'all 0.2s'
-                                    }}
-                                  >
-                                    {isToggling
-                                      ? 'Saving...'
-                                      : group.isMonitored
-                                        ? 'DISABLE'
-                                        : 'ENABLE'}
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
               </div>
-            </div>
-
-            {/* Pending Task Drafts Card */}
-            <div className="dashboard-card pending-drafts-card">
-              <div className="card-header">
-                <div className="card-header-title">
-                  <MessageSquare size={18} className="card-title-icon" />
-                  <h3>Pending WhatsApp Task Drafts</h3>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <span className="card-tag">
-                    {pendingDrafts.length} Awaiting Approval
+              <div className="banner-meta">
+                <div className="banner-stat">
+                  <span className="banner-stat-label">API Health</span>
+                  <span className="banner-stat-value">
+                    <StatusBadge
+                      status={apiStatus?.status === 'healthy' ? 'healthy' : apiStatus?.status === 'degraded' ? 'degraded' : 'offline'}
+                    />
                   </span>
-                  <Button
-                    variant="ghost"
-                    size="small"
-                    icon={ExternalLink}
-                    onClick={() => navigate('/whatsapp-inbox')}
-                  >
-                    View All in Inbox
-                  </Button>
+                </div>
+                <div className="banner-stat">
+                  <span className="banner-stat-label">Active Projects</span>
+                  <span className="banner-stat-value">{metrics.totalProjects || 0}</span>
                 </div>
               </div>
-              <div className="card-body" style={{ padding: '1rem' }}>
-                {loadingDrafts ? (
-                  <p className="text-muted" style={{ fontSize: '0.875rem' }}>Loading pending task drafts...</p>
-                ) : pendingDrafts.length === 0 ? (
-                  <EmptyState
-                    icon={Inbox}
-                    title="No Pending Task Drafts"
-                    description="When work instructions or tasks are posted in your monitored WhatsApp groups, Gemini AI will automatically extract them and queue drafts here for your approval before creating tasks."
-                  />
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {pendingDrafts.map((draft) => {
-                      const title = draft.editableFields?.title || draft.aiExtraction?.title || draft.rawMessageText?.slice(0, 80) || 'Untitled Task Draft';
-                      const priority = draft.editableFields?.priority || draft.aiExtraction?.priority || 'Medium';
-                      const dueDate = draft.editableFields?.dueDate || draft.aiExtraction?.dueDate;
-                      const assignee = draft.editableFields?.assigneeName || draft.aiExtraction?.assigneeName;
-                      const confidence = draft.aiExtraction?.confidence !== undefined ? Math.round(draft.aiExtraction.confidence * 100) : null;
+            </section>
 
-                      return (
-                        <div
-                          key={draft._id}
-                          style={{
-                            border: '1px solid var(--border-color, #e2e8f0)',
-                            borderRadius: '8px',
-                            padding: '0.85rem 1rem',
-                            background: '#ffffff',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.5rem'
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                              <StatusBadge status="pending" label="AWAITING REVIEW" />
-                              {confidence !== null && (
-                                <span style={{ fontSize: '0.75rem', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#475569' }}>
-                                  <Sparkles size={11} color="#f59e0b" />
-                                  {confidence}% AI confidence
-                                </span>
-                              )}
-                              {draft.aiExtraction?.modelUsed && (
-                                <span style={{ fontSize: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', padding: '2px 6px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#64748b' }}>
-                                  <Bot size={11} color="#6366f1" />
-                                  {draft.aiExtraction.modelUsed}
-                                </span>
-                              )}
-                            </div>
-                            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                              {draft.groupName || 'WhatsApp Group'} &bull; {draft.senderName || draft.senderJid} &bull; {new Date(draft.messageTimestamp).toLocaleString()}
-                            </span>
-                          </div>
+            <section className="stats-grid" aria-label="Task Status Summary">
+              {summaryCards.map((metric) => (
+                <StatCard
+                  key={metric.title}
+                  title={metric.title}
+                  value={metric.value}
+                  icon={metric.icon}
+                  variant={metric.variant}
+                  badgeText={metric.badgeText}
+                  description={metric.description}
+                  isSetupState={metric.isSetupState}
+                />
+              ))}
+            </section>
 
-                          <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary, #0f172a)' }}>
-                            {title}
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                            <span style={{ fontSize: '0.8rem', padding: '2px 6px', borderRadius: '4px', background: '#fef3c7', color: '#92400e' }}>
-                              ⚡ {priority}
-                            </span>
-                            {dueDate && (
-                              <span style={{ fontSize: '0.8rem', padding: '2px 6px', borderRadius: '4px', background: '#f3e8ff', color: '#6b21a8' }}>
-                                📅 Due: {new Date(dueDate).toLocaleDateString()}
-                              </span>
-                            )}
-                            {assignee && (
-                              <span style={{ fontSize: '0.8rem', padding: '2px 6px', borderRadius: '4px', background: '#ecfdf5', color: '#047857', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                                <UserIcon size={11} /> Assignee: {assignee}
-                              </span>
-                            )}
-                          </div>
-
-                          <div style={{ background: 'var(--bg-subtle, #f8fafc)', borderLeft: '3px solid #3b82f6', padding: '0.4rem 0.6rem', borderRadius: '0 4px 4px 0', fontSize: '0.825rem', color: '#475569', fontFamily: 'monospace' }}>
-                            {draft.rawMessageText}
-                          </div>
-
-                          {draft.aiExtraction?.reason && (
-                            <div style={{ fontSize: '0.8rem', color: '#64748b', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <Sparkles size={11} color="#f59e0b" />
-                              <span><strong>Reasoning:</strong> {draft.aiExtraction.reason}</span>
-                            </div>
-                          )}
-
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
-                            <Button
-                              variant="primary"
-                              size="small"
-                              icon={Eye}
-                              onClick={() => handleOpenReview(draft)}
-                            >
-                              Review & Approve
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-        </>
+            <section className="dashboard-grid">
+              {renderRecentActivity(false)}
+              {renderUpcomingDeadlines(false)}
+              {renderStatusDistribution(false)}
+              {renderWorkspaceModules(false)}
+              {renderWhatsAppGroups(false)}
+              {renderPendingDrafts(false)}
+            </section>
+          </>
+        )
       )}
 
       {/* System Status Modal */}

@@ -5878,320 +5878,205 @@ body {
   margin-top: 4px;
 }
 
-/* ========================================================
-   NAVBAR TOGGLE & DASHBOARD NO-SCROLL (FIT VIEW) STYLES
-   ======================================================== */
+/* ==========================================================================
+   Sidebar Hidden & Seamless Zero-Scroll Dashboard
+   ========================================================================== */
 
-/* TopNav Hide / Show Behavior */
-.app-main-layout.navbar-hidden .app-header {
-  display: none !important;
+.app-sidebar.sidebar-hidden {
+  transform: translateX(-100%) !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, visibility 0.25s ease !important;
 }
 
-.hide-navbar-header-btn {
-  color: var(--text-muted);
-  transition: all 0.2s ease;
+.app-main-layout.sidebar-hidden {
+  margin-left: 0 !important;
+  width: 100% !important;
+  transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 
-.hide-navbar-header-btn:hover {
-  color: var(--primary);
-  background-color: var(--bg-subtle);
-}
-
-/* Floating Restore Button when Navbar is Hidden */
-.floating-show-navbar-btn {
-  position: fixed;
-  top: 10px;
-  right: 24px;
-  z-index: 100;
+.sidebar-toggle-navbar-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(15, 23, 42, 0.9);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  padding: 6px 14px;
-  border-radius: 20px;
+  padding: 6px 12px;
+  background: var(--bg-subtle, #f1f5f9);
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 8px;
+  color: var(--text-primary, #334155);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
   transition: all 0.2s ease;
+  margin-right: 12px;
 }
 
-.floating-show-navbar-btn:hover {
-  background: #0f172a;
-  color: #ffffff;
-  border-color: #38bdf8;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(56, 189, 248, 0.3);
+.sidebar-toggle-navbar-btn:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  color: #0f172a;
 }
 
-/* Base Full-Width Rules for Dashboard Cards in Standard Mode */
-.dashboard-grid .whatsapp-groups-card,
-.dashboard-grid .pending-drafts-card {
-  grid-column: 1 / -1;
+.sidebar-toggle-navbar-btn.is-collapsed {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #0284c7;
 }
 
-/* Toggle Buttons inside Dashboard Header */
-.navbar-toggle-btn,
-.sidebar-toggle-btn {
-  font-weight: 500;
-  font-size: 0.825rem;
+.sidebar-toggle-navbar-btn.is-collapsed:hover {
+  background: rgba(56, 189, 248, 0.22);
 }
 
-/* ========================================================
-   DASHBOARD FIT-TO-SCREEN (NO-SCROLL) WHEN SIDEBAR HIDDEN
-   ======================================================== */
+/* Single-Screen Zero-Scroll Dashboard Layout */
 @media (min-width: 1024px) {
-  /* When sidebar is collapsed and viewing the dashboard in fit mode */
-  .app-main-layout.sidebar-collapsed .app-content-area:has(.dashboard-fit-mode),
-  .app-main-layout.sidebar-collapsed .dashboard-page.dashboard-fit-mode {
-    height: calc(100vh - var(--header-height, 64px));
-    max-height: calc(100vh - var(--header-height, 64px));
+  .app-main-layout.sidebar-hidden .app-content-area,
+  .app-main-layout.sidebar-hidden .content-sidebar-hidden {
+    height: calc(100vh - var(--header-height));
+    max-height: calc(100vh - var(--header-height));
     overflow: hidden !important;
+    padding: 12px 24px;
+    box-sizing: border-box;
   }
 
-  .app-main-layout.sidebar-collapsed.navbar-hidden .app-content-area:has(.dashboard-fit-mode),
-  .app-main-layout.sidebar-collapsed.navbar-hidden .dashboard-page.dashboard-fit-mode {
-    height: 100vh;
-    max-height: 100vh;
-    overflow: hidden !important;
-  }
-
-  .dashboard-page.dashboard-fit-mode {
+  .dashboard-page-fit-screen {
+    height: calc(100vh - var(--header-height) - 24px);
+    max-height: calc(100vh - var(--header-height) - 24px);
     display: flex;
     flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    gap: 8px;
-    padding-bottom: 8px;
     overflow: hidden !important;
+    gap: 10px;
   }
 
-  /* Compact Page Header */
-  .dashboard-fit-mode .page-header {
+  .dashboard-page-fit-screen .page-header {
     padding-bottom: 6px;
     margin-bottom: 0;
     flex-shrink: 0;
   }
 
-  .dashboard-fit-mode .page-title {
-    font-size: 1.25rem;
-    line-height: 1.2;
-  }
-
-  .dashboard-fit-mode .page-subtitle {
-    font-size: 0.775rem;
-    margin-top: 2px;
-  }
-
-  /* Compact Page Body - Container for all dashboard modules */
-  .dashboard-fit-mode .page-body {
+  .dashboard-page-fit-screen .page-body {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    overflow: hidden;
-  }
-
-  /* Sleek 1-Line Welcome Banner in Fit Mode */
-  .dashboard-fit-mode .welcome-banner {
-    padding: 6px 14px;
-    border-radius: var(--radius-md);
-    margin-bottom: 0;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: auto;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-content {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-badge {
-    margin-bottom: 0;
-    padding: 2px 8px;
-    font-size: 0.725rem;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-title {
-    font-size: 0.85rem;
-    font-weight: 600;
-    margin: 0;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-text {
-    display: none;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-meta {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    margin: 0;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-stat {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-stat-label {
-    font-size: 0.725rem;
-  }
-
-  .dashboard-fit-mode .welcome-banner .banner-stat-value {
-    font-size: 0.825rem;
-  }
-
-  /* Compact KPI Stat Cards Row */
-  .dashboard-fit-mode .stats-grid {
-    flex-shrink: 0;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    margin-bottom: 0;
-  }
-
-  .dashboard-fit-mode .stat-card {
-    padding: 8px 12px;
-    min-height: auto;
-    border-radius: var(--radius-md);
-  }
-
-  .dashboard-fit-mode .stat-card .stat-card-header {
-    margin-bottom: 4px;
-  }
-
-  .dashboard-fit-mode .stat-card .stat-card-title {
-    font-size: 0.775rem;
-  }
-
-  .dashboard-fit-mode .stat-card .stat-card-value {
-    font-size: 1.25rem;
-    line-height: 1;
-    font-weight: 700;
-  }
-
-  .dashboard-fit-mode .stat-card .stat-card-description {
-    display: none;
-  }
-
-  .dashboard-fit-mode .stat-card .stat-card-icon-container {
-    width: 30px;
-    height: 30px;
-  }
-
-  /* 3-Column x 2-Row Dense Dashboard Modules Grid */
-  .dashboard-fit-mode .dashboard-grid {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: 1fr 1.35fr 1fr;
-    grid-template-rows: 1fr 1fr;
     gap: 10px;
     overflow: hidden;
   }
 
-  /* All Dashboard Cards in Fit Mode: Height 100%, Internal Overflow Scroll */
-  .dashboard-fit-mode .dashboard-card {
+  .dashboard-fit-wrapper {
+    flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .dashboard-grid-fit {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.35fr;
+    gap: 12px;
     height: 100%;
+    overflow: hidden;
+  }
+
+  .fit-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .fit-column .dashboard-card {
+    flex: 1;
+    min-height: 0;
+    height: calc(50% - 6px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border-radius: var(--radius-md);
+    border-radius: 10px;
   }
 
-  .dashboard-fit-mode .dashboard-card .card-header {
-    padding: 8px 12px;
+  .fit-column .card-header {
+    padding: 10px 14px;
     flex-shrink: 0;
   }
 
-  .dashboard-fit-mode .dashboard-card .card-header h3 {
-    font-size: 0.825rem;
+  .fit-column .card-header h3 {
+    font-size: 13px;
   }
 
-  .dashboard-fit-mode .dashboard-card .card-body {
+  .fit-column .card-body {
+    padding: 10px 14px;
     flex: 1;
     min-height: 0;
-    overflow-y: auto !important;
-    padding: 10px 12px;
+    overflow-y: auto;
   }
 
-  /* Custom Slim Scrollbars for Card Content */
-  .dashboard-fit-mode .dashboard-card .card-body::-webkit-scrollbar {
+  .fit-column .card-body::-webkit-scrollbar {
     width: 5px;
     height: 5px;
   }
-
-  .dashboard-fit-mode .dashboard-card .card-body::-webkit-scrollbar-track {
+  .fit-column .card-body::-webkit-scrollbar-track {
     background: transparent;
   }
-
-  .dashboard-fit-mode .dashboard-card .card-body::-webkit-scrollbar-thumb {
+  .fit-column .card-body::-webkit-scrollbar-thumb {
     background: rgba(148, 163, 184, 0.4);
     border-radius: 4px;
   }
-
-  .dashboard-fit-mode .dashboard-card .card-body::-webkit-scrollbar-thumb:hover {
-    background: rgba(100, 116, 139, 0.7);
-  }
-
-  /* Grid Positions in 3x2 Matrix */
-  .dashboard-fit-mode .recent-activity-card {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .dashboard-fit-mode .upcoming-deadlines-card {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .dashboard-fit-mode .pending-drafts-card {
-    grid-column: 2 !important;
-    grid-row: 1 / span 2 !important;
-  }
-
-  .dashboard-fit-mode .whatsapp-groups-card {
-    grid-column: 3 !important;
-    grid-row: 1 !important;
-  }
-
-  .dashboard-fit-mode .status-distribution-card {
-    grid-column: 3;
-    grid-row: 2;
-  }
-
-  .dashboard-fit-mode .team-workload-card {
-    display: none;
-  }
-
-  /* Compact Activity & Deadlines Items in Fit Mode */
-  .dashboard-fit-mode .activity-item,
-  .dashboard-fit-mode .deadline-item {
-    padding: 5px 8px;
-    font-size: 0.775rem;
-  }
-
-  .dashboard-fit-mode .activity-title,
-  .dashboard-fit-mode .deadline-task {
-    font-size: 0.775rem;
-  }
-
-  .dashboard-fit-mode .status-bar-row {
-    margin-bottom: 4px;
-    font-size: 0.75rem;
+  .fit-column .card-body::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.7);
   }
 }
 
+/* Compact KPI Ribbon */
+.dashboard-kpi-ribbon {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+  border: 1px solid var(--border-light, #e2e8f0);
+  border-radius: var(--radius-lg, 8px);
+  padding: 8px 16px;
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.kpi-ribbon-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  white-space: nowrap;
+}
+
+.kpi-ribbon-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.kpi-ribbon-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.kpi-ribbon-value.pending { color: #d97706; }
+.kpi-ribbon-value.in-progress { color: #2563eb; }
+.kpi-ribbon-value.in-review { color: #8b5cf6; }
+.kpi-ribbon-value.completed { color: #16a34a; }
+.kpi-ribbon-value.overdue { color: #dc2626; }
+.kpi-ribbon-value.drafts { color: #9333ea; }
+.kpi-ribbon-value.groups { color: #0284c7; }
 
